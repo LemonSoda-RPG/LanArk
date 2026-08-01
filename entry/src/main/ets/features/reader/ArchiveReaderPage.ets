@@ -124,6 +124,8 @@ struct ReaderImageView {
   serverUrl: string = '';
   apiKey: string = '';
   continuous: boolean = false;
+  @Prop doublePage: boolean = false;
+  @Prop imageAlignment: Alignment = Alignment.Center;
   // This is a one-way input so an active waterfall page is relaid out when
   // the parent changes the reading width. Keeping it on the page component
   // avoids scaling the List viewport itself.
@@ -134,6 +136,8 @@ struct ReaderImageView {
   @State private errorMessage: string = '';
   @State private imageAspectRatio: number = 0.707;
   @State private zoomScale: number = 1;
+  @State private viewportWidth: number = 1;
+  @State private viewportHeight: number = 1;
 
   aboutToAppear(): void {
     this.loadImage();
@@ -153,11 +157,11 @@ struct ReaderImageView {
       .width(`${this.contentWidthPercent}%`)
       .aspectRatio(this.imageAspectRatio)
       .backgroundColor(Color.Black)
-    } else {
-      Scroll() {
-        Stack() {
-          this.imageContent()
-        }
+      } else {
+        Scroll() {
+          Stack() {
+            this.imageContent()
+          }
         .width('100%')
         .height('100%')
       }
@@ -169,22 +173,46 @@ struct ReaderImageView {
       .zoomScale(this.zoomScale)
       .enableBouncesZoom(true)
       .scrollBar(BarState.Off)
-      .onDidZoom((scale: number) => {
-        this.zoomScale = scale;
-        this.onZoomChanged(scale);
-      })
-      .backgroundColor(Color.Black)
-    }
+        .onDidZoom((scale: number) => {
+          this.zoomScale = scale;
+          this.onZoomChanged(scale);
+        })
+        .onAreaChange((oldValue: Area, newValue: Area) => {
+          if (typeof newValue.width === 'number' && newValue.width > 0) {
+            this.viewportWidth = newValue.width;
+          }
+          if (typeof newValue.height === 'number' && newValue.height > 0) {
+            this.viewportHeight = newValue.height;
+          }
+        })
+        .backgroundColor(Color.Black)
+      }
   }
 
   @Builder
   private imageContent() {
-    Stack() {
+    Stack({
+      alignContent: this.doublePage ? this.imageAlignment : Alignment.Center
+    }) {
       if (this.pixelMap !== undefined) {
-        Image(this.pixelMap as image.PixelMap)
-          .width('100%')
-          .height('100%')
-          .objectFit(ImageFit.Contain)
+        if (this.doublePage) {
+          if (this.shouldFitDoublePageByWidth()) {
+            Image(this.pixelMap as image.PixelMap)
+              .width('100%')
+              .aspectRatio(this.imageAspectRatio)
+              .objectFit(ImageFit.Fill)
+          } else {
+            Image(this.pixelMap as image.PixelMap)
+              .height('100%')
+              .aspectRatio(this.imageAspectRatio)
+              .objectFit(ImageFit.Fill)
+          }
+        } else {
+          Image(this.pixelMap as image.PixelMap)
+            .width('100%')
+            .height('100%')
+            .objectFit(ImageFit.Contain)
+        }
       } else if (this.isLoading) {
         Column({ space: 12 }) {
           LoadingProgress()
@@ -214,6 +242,13 @@ struct ReaderImageView {
     }
     .width('100%')
     .height('100%')
+  }
+
+  private shouldFitDoublePageByWidth(): boolean {
+    if (this.viewportWidth <= 0 || this.viewportHeight <= 0) {
+      return true;
+    }
+    return this.imageAspectRatio >= this.viewportWidth / this.viewportHeight;
   }
 
   private async loadImage(): Promise<void> {
@@ -568,11 +603,11 @@ export struct ArchiveReaderPage {
   private doublePageSpread(spread: ReaderSpread) {
     Row({ space: 0 }) {
       if (this.readDirectionIndex === 1) {
-        this.doublePageSlot(spread.laterPage)
-        this.doublePageSlot(spread.earlierPage)
+        this.doublePageSlot(spread.laterPage, Alignment.End)
+        this.doublePageSlot(spread.earlierPage, Alignment.Start)
       } else {
-        this.doublePageSlot(spread.earlierPage)
-        this.doublePageSlot(spread.laterPage)
+        this.doublePageSlot(spread.earlierPage, Alignment.End)
+        this.doublePageSlot(spread.laterPage, Alignment.Start)
       }
     }
     .width('100%')
@@ -581,7 +616,7 @@ export struct ArchiveReaderPage {
   }
 
   @Builder
-  private doublePageSlot(page: ReaderPage | undefined) {
+  private doublePageSlot(page: ReaderPage | undefined, alignment: Alignment) {
     Stack() {
       if (page !== undefined) {
         ReaderImageView({
@@ -590,6 +625,8 @@ export struct ArchiveReaderPage {
           serverUrl: this.serverUrl,
           apiKey: this.apiKey,
           continuous: false,
+          doublePage: true,
+          imageAlignment: alignment,
           onZoomChanged: (scale: number): void => {
             this.pageZoomScale = scale;
           }
