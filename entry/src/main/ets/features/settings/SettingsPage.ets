@@ -1,0 +1,918 @@
+import { common } from '@kit.AbilityKit';
+import {
+  ImageCacheStats,
+  ImageDiskCache
+} from '../../data/cache/ImageDiskCache';
+import {
+  LibrarySettings,
+  LibrarySettingsRepository
+} from '../../data/config/LibrarySettingsRepository';
+import {
+  ReaderSettings,
+  ReaderSettingsRepository
+} from '../../data/config/ReaderSettingsRepository';
+import { ServerConfigRepository } from '../../data/config/ServerConfigRepository';
+import { LanraragiApiClient } from '../../data/network/LanraragiApiClient';
+import { ServerConfig } from '../../domain/model/LanraragiModels';
+
+interface CacheDialogResult {
+  index: number;
+}
+
+@Component
+export struct SettingsPage {
+  @Consume('pathStack') private pathStack: NavPathStack = new NavPathStack();
+  onServerSaved: (config: ServerConfig) => void = (config: ServerConfig): void => {};
+  onServerCleared: () => void = (): void => {};
+  onLibrarySettingsSaved: (settings: LibrarySettings) => void =
+    (settings: LibrarySettings): void => {};
+  @State private serverUrl: string = '';
+  @State private apiKey: string = '';
+  @State private directionIndex: number = 0;
+  @State private readerModeIndex: number = 0;
+  @State private doublePageOffset: number = 0;
+  @State private tapPagingEnabled: boolean = true;
+  @State private initialControlsVisible: boolean = true;
+  @State private preloadPageCount: number = 3;
+  @State private hideCompleted: boolean = false;
+  @State private gridLayout: boolean = false;
+  @State private gridColumns: number = 0;
+  @State private isServerBusy: boolean = false;
+  @State private serverMessage: string = '';
+  @State private serverMessageIsError: boolean = false;
+  @State private readerMessage: string = '';
+  @State private cacheSizeText: string = '正在统计…';
+  @State private cacheFileCount: number = 0;
+  @State private isCacheBusy: boolean = false;
+  @State private cacheMessage: string = '';
+  @State private cacheMessageIsError: boolean = false;
+
+  aboutToAppear(): void {
+    this.loadSettings();
+    this.refreshCacheStats();
+  }
+
+  build() {
+    NavDestination() {
+      Scroll() {
+        Column({ space: 18 }) {
+          this.introductionCard()
+          this.serverSection()
+          this.librarySection()
+          this.cacheSection()
+          this.readerSection()
+          Text('服务器配置仅保存在本机；阅读时只同步进度，不会删除服务器中的任何档案。')
+            .copyOption(CopyOptions.LocalDevice)
+            .fontSize(12)
+            .lineHeight(18)
+            .fontColor($r('app.color.text_tertiary'))
+            .width('100%')
+            .padding({ left: 4, right: 4, bottom: 24 })
+        }
+        .width('100%')
+        .constraintSize({ maxWidth: 680 })
+        .padding({ left: 16, right: 16, top: 14, bottom: 24 })
+      }
+      .width('100%')
+      .height('100%')
+      .scrollBar(BarState.Off)
+    }
+    .title('设置')
+    .backgroundColor($r('app.color.page_background'))
+  }
+
+  @Builder
+  private introductionCard() {
+    Row({ space: 14 }) {
+      Stack({ alignContent: Alignment.Center }) {
+        Image($r('app.media.icon_settings'))
+          .width(25)
+          .height(25)
+          .renderMode(ImageRenderMode.Template)
+          .fillColor(Color.White)
+      }
+      .width(48)
+      .height(48)
+      .backgroundColor($r('app.color.accent'))
+      .borderRadius(15)
+
+      Column({ space: 4 }) {
+        Text('应用设置')
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(21)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('app.color.text_primary'))
+          .width('100%')
+        Text('连接配置与默认阅读体验')
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(13)
+          .fontColor($r('app.color.text_tertiary'))
+          .width('100%')
+      }
+      .layoutWeight(1)
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor($r('app.color.surface'))
+    .border({ width: 1, color: $r('app.color.divider') })
+    .borderRadius(18)
+  }
+
+  @Builder
+  private serverSection() {
+    Column({ space: 14 }) {
+      this.sectionTitle('服务器连接', '修改后需要验证才能保存')
+
+      Column({ space: 7 }) {
+        Text('服务器地址')
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_secondary'))
+          .width('100%')
+        TextInput({
+          placeholder: '例如：http://192.168.1.10:3000',
+          text: this.serverUrl
+        })
+          .type(InputType.Normal)
+          .height(50)
+          .fontColor($r('app.color.text_primary'))
+          .placeholderColor($r('app.color.text_tertiary'))
+          .backgroundColor($r('app.color.surface_muted'))
+          .borderRadius(12)
+          .onChange((value: string) => {
+            this.serverUrl = value;
+            this.serverMessage = '';
+          })
+      }
+      .width('100%')
+
+      Column({ space: 7 }) {
+        Text('API Key')
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_secondary'))
+          .width('100%')
+        TextInput({
+          placeholder: '输入 LANraragi API Key',
+          text: this.apiKey
+        })
+          .type(InputType.Password)
+          .showPasswordIcon(true)
+          .height(50)
+          .fontColor($r('app.color.text_primary'))
+          .placeholderColor($r('app.color.text_tertiary'))
+          .backgroundColor($r('app.color.surface_muted'))
+          .borderRadius(12)
+          .onChange((value: string) => {
+            this.apiKey = value;
+            this.serverMessage = '';
+          })
+      }
+      .width('100%')
+
+      if (this.serverMessage.length > 0) {
+        Text(this.serverMessage)
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(13)
+          .lineHeight(19)
+          .fontColor(this.serverMessageIsError ?
+            $r('app.color.error') : $r('app.color.success'))
+          .width('100%')
+          .padding(11)
+          .backgroundColor(this.serverMessageIsError ?
+            $r('app.color.error_soft') : $r('app.color.success_soft'))
+          .borderRadius(10)
+      }
+
+      Row({ space: 10 }) {
+        Button(this.isServerBusy ? '正在验证…' : '验证并保存')
+          .height(46)
+          .layoutWeight(1)
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
+          .backgroundColor($r('app.color.accent'))
+          .enabled(!this.isServerBusy)
+          .onClick(() => {
+            this.verifyAndSaveServer();
+          })
+
+        Button('清除本机配置')
+          .height(46)
+          .fontSize(14)
+          .fontColor($r('app.color.error'))
+          .backgroundColor($r('app.color.error_soft'))
+          .enabled(!this.isServerBusy)
+          .onClick(() => {
+            this.clearLocalServer();
+          })
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor($r('app.color.surface'))
+    .border({ width: 1, color: $r('app.color.divider') })
+    .borderRadius(18)
+  }
+
+  @Builder
+  private librarySection() {
+    Column({ space: 10 }) {
+      this.sectionTitle('书库设置', '筛选与布局会自动保存')
+
+      Row({ space: 12 }) {
+        Column({ space: 3 }) {
+          Text('隐藏已读完档案')
+            .copyOption(CopyOptions.LocalDevice)
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_primary'))
+            .width('100%')
+          Text('书库与分类中不显示进度已完成的档案')
+            .copyOption(CopyOptions.LocalDevice)
+            .fontSize(12)
+            .lineHeight(17)
+            .fontColor($r('app.color.text_tertiary'))
+            .width('100%')
+        }
+        .layoutWeight(1)
+
+        Toggle({ type: ToggleType.Switch, isOn: this.hideCompleted })
+          .selectedColor($r('app.color.accent'))
+          .onChange((value: boolean) => {
+            this.hideCompleted = value;
+            this.saveLibrarySettings();
+          })
+      }
+      .width('100%')
+      .height(66)
+      .padding({ top: 8, bottom: 8 })
+
+      Divider().color($r('app.color.divider'))
+
+      Column({ space: 8 }) {
+        Text('书库布局')
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+          .width('100%')
+        Select([
+          { value: '列表布局' },
+          { value: '封面网格布局' }
+        ])
+          .selected(this.gridLayout ? 1 : 0)
+          .value(this.gridLayout ? '封面网格布局' : '列表布局')
+          .height(46)
+          .fontColor($r('app.color.text_primary'))
+          .selectedOptionFontColor(Color.White)
+          .selectedOptionBgColor($r('app.color.accent'))
+          .optionFontColor($r('app.color.text_primary'))
+          .optionBgColor($r('app.color.surface'))
+          .backgroundColor($r('app.color.surface_muted'))
+          .width('100%')
+          .onSelect((index: number, value: string) => {
+          this.gridLayout = index === 1;
+          this.saveLibrarySettings();
+        })
+      }
+      .width('100%')
+      .padding({ top: 6, bottom: 6 })
+
+      Column({ space: 8 }) {
+        Text('网格每行文档数')
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+          .width('100%')
+        Text('自动模式会根据手机或平板的可用宽度排列文档，也可以手动指定列数')
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(12)
+          .lineHeight(17)
+          .fontColor($r('app.color.text_tertiary'))
+          .width('100%')
+        Select([
+          { value: '自动适配' },
+          { value: '每行 2 个' },
+          { value: '每行 3 个' },
+          { value: '每行 4 个' },
+          { value: '每行 5 个' },
+          { value: '每行 6 个' }
+        ])
+          .selected(this.gridColumnsOptionIndex())
+          .value(this.gridColumnsLabel())
+          .height(46)
+          .fontColor($r('app.color.text_primary'))
+          .selectedOptionFontColor(Color.White)
+          .selectedOptionBgColor($r('app.color.accent'))
+          .optionFontColor($r('app.color.text_primary'))
+          .optionBgColor($r('app.color.surface'))
+          .backgroundColor($r('app.color.surface_muted'))
+          .width('100%')
+          .onSelect((index: number, value: string) => {
+            const values: Array<number> = [0, 2, 3, 4, 5, 6];
+            this.gridColumns = values[index] ?? 0;
+            this.saveLibrarySettings();
+          })
+      }
+      .width('100%')
+      .padding({ top: 6, bottom: 6 })
+
+      Text('书库中的排序方式与升降序也会自动记住。')
+        .copyOption(CopyOptions.LocalDevice)
+        .fontSize(12)
+        .fontColor($r('app.color.text_tertiary'))
+        .width('100%')
+        .padding({ top: 6 })
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor($r('app.color.surface'))
+    .border({ width: 1, color: $r('app.color.divider') })
+    .borderRadius(18)
+  }
+
+  @Builder
+  private readerSection() {
+    Column({ space: 6 }) {
+      this.sectionTitle('阅读设置', '更改会自动保存')
+
+      Column({ space: 8 }) {
+        Text('默认阅读模式')
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+          .width('100%')
+        Select([
+          { value: '单页阅读' },
+          { value: '双页阅读' },
+          { value: '瀑布连续阅读' }
+        ])
+          .selected(this.readerModeIndex)
+          .value(this.readerModeLabel())
+          .height(46)
+          .fontColor($r('app.color.text_primary'))
+          .selectedOptionFontColor(Color.White)
+          .selectedOptionBgColor($r('app.color.accent'))
+          .optionFontColor($r('app.color.text_primary'))
+          .optionBgColor($r('app.color.surface'))
+          .backgroundColor($r('app.color.surface_muted'))
+          .width('100%')
+          .onSelect((index: number, value: string) => {
+            this.readerModeIndex = index;
+            this.saveReaderSettings();
+          })
+      }
+      .width('100%')
+      .padding({ top: 10, bottom: 10 })
+
+      Divider().color($r('app.color.divider'))
+
+      Column({ space: 8 }) {
+        Text('横向阅读方向')
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+          .width('100%')
+        Text('用于单页和双页阅读；右→左时，双页中的先读页会放在右侧')
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(12)
+          .lineHeight(17)
+          .fontColor($r('app.color.text_tertiary'))
+          .width('100%')
+        Select([
+          { value: '左→右' },
+          { value: '右→左' }
+        ])
+          .selected(this.directionIndex)
+          .value(this.directionLabel())
+          .height(46)
+          .fontColor($r('app.color.text_primary'))
+          .selectedOptionFontColor(Color.White)
+          .selectedOptionBgColor($r('app.color.accent'))
+          .optionFontColor($r('app.color.text_primary'))
+          .optionBgColor($r('app.color.surface'))
+          .backgroundColor($r('app.color.surface_muted'))
+          .width('100%')
+          .onSelect((index: number, value: string) => {
+            this.directionIndex = index;
+            this.saveReaderSettings();
+          })
+      }
+      .width('100%')
+      .padding({ top: 10, bottom: 10 })
+
+      Divider().color($r('app.color.divider'))
+
+      Column({ space: 8 }) {
+        Text('双页默认配对')
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+          .width('100%')
+        Text('也可以在双页阅读界面点击顶部的配对按钮随时切换')
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(12)
+          .lineHeight(17)
+          .fontColor($r('app.color.text_tertiary'))
+          .width('100%')
+        Select([
+          { value: '第 1+2 页、3+4 页…' },
+          { value: '第 1 页单独、2+3 页…' }
+        ])
+          .selected(this.doublePageOffset)
+          .value(this.doublePageOffsetLabel())
+          .height(46)
+          .fontColor($r('app.color.text_primary'))
+          .selectedOptionFontColor(Color.White)
+          .selectedOptionBgColor($r('app.color.accent'))
+          .optionFontColor($r('app.color.text_primary'))
+          .optionBgColor($r('app.color.surface'))
+          .backgroundColor($r('app.color.surface_muted'))
+          .width('100%')
+          .onSelect((index: number, value: string) => {
+            this.doublePageOffset = index === 1 ? 1 : 0;
+            this.saveReaderSettings();
+          })
+      }
+      .width('100%')
+      .padding({ top: 10, bottom: 10 })
+
+      Divider().color($r('app.color.divider'))
+
+      Column({ space: 8 }) {
+        Text('预加载页数')
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+          .width('100%')
+        Text('提前加载当前页前后的页面；数值越大翻页越顺畅，但会占用更多内存和临时缓存')
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(12)
+          .lineHeight(17)
+          .fontColor($r('app.color.text_tertiary'))
+          .width('100%')
+        Select([
+          { value: '不预加载' },
+          { value: '1 页' },
+          { value: '2 页' },
+          { value: '3 页（推荐）' },
+          { value: '5 页' },
+          { value: '8 页' }
+        ])
+          .selected(this.preloadOptionIndex())
+          .value(this.preloadLabel())
+          .height(46)
+          .fontColor($r('app.color.text_primary'))
+          .selectedOptionFontColor(Color.White)
+          .selectedOptionBgColor($r('app.color.accent'))
+          .optionFontColor($r('app.color.text_primary'))
+          .optionBgColor($r('app.color.surface'))
+          .backgroundColor($r('app.color.surface_muted'))
+          .width('100%')
+          .onSelect((index: number, value: string) => {
+            const values: Array<number> = [0, 1, 2, 3, 5, 8];
+            this.preloadPageCount = values[index] ?? 3;
+            this.saveReaderSettings();
+          })
+      }
+      .width('100%')
+      .padding({ top: 10, bottom: 10 })
+
+      Divider().color($r('app.color.divider'))
+
+      Row({ space: 12 }) {
+        Column({ space: 3 }) {
+          Text('点击区域翻页')
+            .copyOption(CopyOptions.LocalDevice)
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_primary'))
+            .width('100%')
+          Text('点击屏幕左右两侧翻页，中间显示或隐藏页码栏')
+            .copyOption(CopyOptions.LocalDevice)
+            .fontSize(12)
+            .lineHeight(17)
+            .fontColor($r('app.color.text_tertiary'))
+            .width('100%')
+        }
+        .layoutWeight(1)
+
+        Toggle({ type: ToggleType.Switch, isOn: this.tapPagingEnabled })
+          .selectedColor($r('app.color.accent'))
+          .onChange((value: boolean) => {
+            this.tapPagingEnabled = value;
+            this.saveReaderSettings();
+          })
+      }
+      .width('100%')
+      .height(66)
+      .padding({ top: 8, bottom: 8 })
+
+      Divider().color($r('app.color.divider'))
+
+      Row({ space: 12 }) {
+        Column({ space: 3 }) {
+          Text('进入时显示页码栏')
+            .copyOption(CopyOptions.LocalDevice)
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_primary'))
+            .width('100%')
+          Text('打开档案时先显示页码与拖拽进度条')
+            .copyOption(CopyOptions.LocalDevice)
+            .fontSize(12)
+            .lineHeight(17)
+            .fontColor($r('app.color.text_tertiary'))
+            .width('100%')
+        }
+        .layoutWeight(1)
+
+        Toggle({ type: ToggleType.Switch, isOn: this.initialControlsVisible })
+          .selectedColor($r('app.color.accent'))
+          .onChange((value: boolean) => {
+            this.initialControlsVisible = value;
+            this.saveReaderSettings();
+          })
+      }
+      .width('100%')
+      .height(66)
+      .padding({ top: 8, bottom: 8 })
+
+      if (this.readerMessage.length > 0) {
+        Text(this.readerMessage)
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(12)
+          .fontColor($r('app.color.success'))
+          .width('100%')
+          .padding({ top: 6 })
+      }
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor($r('app.color.surface'))
+    .border({ width: 1, color: $r('app.color.divider') })
+    .borderRadius(18)
+  }
+
+  @Builder
+  private cacheSection() {
+    Column({ space: 14 }) {
+      this.sectionTitle('图片缓存', '封面长期保存，阅读页退出档案后自动删除')
+
+      Row({ space: 12 }) {
+        Column({ space: 4 }) {
+          Text(this.cacheSizeText)
+            .copyOption(CopyOptions.LocalDevice)
+            .fontSize(22)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.text_primary'))
+            .width('100%')
+          Text(`${this.cacheFileCount} 个图片文件`)
+            .copyOption(CopyOptions.LocalDevice)
+            .fontSize(12)
+            .fontColor($r('app.color.text_tertiary'))
+            .width('100%')
+        }
+        .layoutWeight(1)
+
+        Button(this.isCacheBusy ? '正在清理…' : '清空缓存')
+          .height(44)
+          .fontSize(14)
+          .fontColor($r('app.color.error'))
+          .backgroundColor($r('app.color.error_soft'))
+          .enabled(!this.isCacheBusy)
+          .onClick(() => {
+            this.confirmClearCache();
+          })
+      }
+      .width('100%')
+
+      Text('阅读页只在当前阅读期间缓存；退出档案后自动释放。清理操作不会影响服务器档案、进度和连接配置。')
+        .copyOption(CopyOptions.LocalDevice)
+        .fontSize(12)
+        .lineHeight(18)
+        .fontColor($r('app.color.text_tertiary'))
+        .width('100%')
+
+      if (this.cacheMessage.length > 0) {
+        Text(this.cacheMessage)
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(12)
+          .fontColor(this.cacheMessageIsError ?
+            $r('app.color.error') : $r('app.color.success'))
+          .width('100%')
+      }
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor($r('app.color.surface'))
+    .border({ width: 1, color: $r('app.color.divider') })
+    .borderRadius(18)
+  }
+
+  @Builder
+  private sectionTitle(title: string, subtitle: string) {
+    Column({ space: 3 }) {
+      Text(title)
+        .copyOption(CopyOptions.LocalDevice)
+        .fontSize(18)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.text_primary'))
+        .width('100%')
+      Text(subtitle)
+        .copyOption(CopyOptions.LocalDevice)
+        .fontSize(12)
+        .fontColor($r('app.color.text_tertiary'))
+        .width('100%')
+    }
+    .width('100%')
+    .padding({ bottom: 4 })
+  }
+
+  private async loadSettings(): Promise<void> {
+    try {
+      const config: ServerConfig = await this.serverRepository().load();
+      this.serverUrl = config.serverUrl;
+      this.apiKey = config.apiKey;
+    } catch (error) {
+      this.serverMessageIsError = true;
+      this.serverMessage = this.describeError(error);
+    }
+
+    try {
+      const settings: ReaderSettings = await this.readerRepository().load();
+      this.applyReaderSettings(settings);
+    } catch (error) {
+      this.readerMessage = '读取阅读设置失败，将使用默认值';
+    }
+
+    try {
+      const settings: LibrarySettings = await this.libraryRepository().load();
+      this.hideCompleted = settings.hideCompleted;
+      this.gridLayout = settings.gridLayout;
+      this.gridColumns = settings.gridColumns;
+    } catch (error) {
+      // Library defaults remain available when preferences cannot be read.
+    }
+  }
+
+  private refreshCacheStats(): void {
+    try {
+      const stats: ImageCacheStats = this.imageCache().stats();
+      this.cacheSizeText = this.formatBytes(stats.bytes);
+      this.cacheFileCount = stats.fileCount;
+      this.cacheMessageIsError = false;
+    } catch (error) {
+      this.cacheSizeText = '统计失败';
+      this.cacheFileCount = 0;
+      this.cacheMessageIsError = true;
+      this.cacheMessage = '暂时无法读取本地缓存信息';
+    }
+  }
+
+  private async confirmClearCache(): Promise<void> {
+    try {
+      const result: CacheDialogResult = await
+        (this.getUIContext().getPromptAction().showDialog({
+          title: '清空图片缓存？',
+          message: '只会删除手机本地的封面和阅读页副本，下次查看时会重新从服务器加载。',
+          buttons: [
+            { text: '取消', color: '#5D6B7A' },
+            { text: '清空', color: '#C43E3E' }
+          ]
+        }) as Promise<CacheDialogResult>);
+      if (result.index === 1) {
+        this.clearImageCache();
+      }
+    } catch (error) {
+      // Closing the dialog or a prompt failure should not affect settings.
+    }
+  }
+
+  private clearImageCache(): void {
+    if (this.isCacheBusy) {
+      return;
+    }
+    this.isCacheBusy = true;
+    this.cacheMessage = '';
+    try {
+      this.imageCache().clearAll();
+      this.cacheSizeText = '0 B';
+      this.cacheFileCount = 0;
+      this.cacheMessageIsError = false;
+      this.cacheMessage = '本机图片缓存已清空';
+    } catch (error) {
+      this.cacheMessageIsError = true;
+      this.cacheMessage = '清空缓存失败，请稍后重试';
+      this.refreshCacheStats();
+    } finally {
+      this.isCacheBusy = false;
+    }
+  }
+
+  private formatBytes(bytes: number): string {
+    if (bytes < 1024) {
+      return `${bytes} B`;
+    }
+    if (bytes < 1024 * 1024) {
+      return `${(bytes / 1024).toFixed(1)} KB`;
+    }
+    if (bytes < 1024 * 1024 * 1024) {
+      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    }
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  }
+
+  private async verifyAndSaveServer(): Promise<void> {
+    if (this.isServerBusy) {
+      return;
+    }
+    if (this.serverUrl.trim().length === 0) {
+      this.serverMessageIsError = true;
+      this.serverMessage = '请输入 LANraragi 服务器地址';
+      return;
+    }
+
+    this.isServerBusy = true;
+    this.serverMessage = '';
+    try {
+      const normalizedUrl: string =
+        LanraragiApiClient.normalizeServerUrl(this.serverUrl);
+      const config: ServerConfig = new ServerConfig(normalizedUrl, this.apiKey);
+      const client: LanraragiApiClient =
+        new LanraragiApiClient(config.serverUrl, config.apiKey);
+      await client.fetchServerInfo();
+      await this.serverRepository().save(config);
+      this.serverUrl = normalizedUrl;
+      this.serverMessageIsError = false;
+      this.serverMessage = '连接验证成功，配置已安全保存';
+      this.onServerSaved(config);
+      this.pathStack.pop();
+    } catch (error) {
+      this.serverMessageIsError = true;
+      this.serverMessage = this.describeError(error);
+    } finally {
+      this.isServerBusy = false;
+    }
+  }
+
+  private async clearLocalServer(): Promise<void> {
+    if (this.isServerBusy) {
+      return;
+    }
+    this.isServerBusy = true;
+    this.serverMessage = '';
+    try {
+      await this.serverRepository().clear();
+      this.serverUrl = '';
+      this.apiKey = '';
+      this.serverMessageIsError = false;
+      this.serverMessage = '本机连接配置已清除，服务器档案未作任何更改';
+      this.onServerCleared();
+      this.pathStack.pop();
+    } catch (error) {
+      this.serverMessageIsError = true;
+      this.serverMessage = this.describeError(error);
+    } finally {
+      this.isServerBusy = false;
+    }
+  }
+
+  private async saveReaderSettings(): Promise<void> {
+    try {
+      await this.readerRepository().save(this.currentReaderSettings());
+      this.readerMessage = '阅读设置已保存';
+    } catch (error) {
+      this.readerMessage = '阅读设置保存失败';
+    }
+  }
+
+  private async saveLibrarySettings(): Promise<void> {
+    try {
+      const current: LibrarySettings = await this.libraryRepository().load();
+      const updated: LibrarySettings = new LibrarySettings(
+        current.sortModeIndex,
+        current.sortAscending,
+        this.hideCompleted,
+        this.gridLayout,
+        this.gridColumns
+      );
+      await this.libraryRepository().save(updated);
+      this.onLibrarySettingsSaved(updated);
+    } catch (error) {
+      this.readerMessage = '书库设置保存失败';
+    }
+  }
+
+  private gridColumnsOptionIndex(): number {
+    const values: Array<number> = [0, 2, 3, 4, 5, 6];
+    const index: number = values.indexOf(this.gridColumns);
+    return index >= 0 ? index : 0;
+  }
+
+  private gridColumnsLabel(): string {
+    const labels: Array<string> = [
+      '自动适配',
+      '每行 2 个',
+      '每行 3 个',
+      '每行 4 个',
+      '每行 5 个',
+      '每行 6 个'
+    ];
+    return labels[this.gridColumnsOptionIndex()];
+  }
+
+  private currentReaderSettings(): ReaderSettings {
+    return new ReaderSettings(
+      this.directionIndex,
+      this.readerModeIndex,
+      this.doublePageOffset,
+      this.tapPagingEnabled,
+      this.initialControlsVisible,
+      this.preloadPageCount
+    );
+  }
+
+  private applyReaderSettings(settings: ReaderSettings): void {
+    this.directionIndex = settings.directionIndex;
+    this.readerModeIndex = settings.modeIndex;
+    this.doublePageOffset = settings.doublePageOffset;
+    this.tapPagingEnabled = settings.tapPagingEnabled;
+    this.initialControlsVisible = settings.initialControlsVisible;
+    this.preloadPageCount = settings.preloadPageCount;
+  }
+
+  private preloadOptionIndex(): number {
+    const values: Array<number> = [0, 1, 2, 3, 5, 8];
+    const index: number = values.indexOf(this.preloadPageCount);
+    return index >= 0 ? index : 3;
+  }
+
+  private preloadLabel(): string {
+    const labels: Array<string> = [
+      '不预加载',
+      '1 页',
+      '2 页',
+      '3 页（推荐）',
+      '5 页',
+      '8 页'
+    ];
+    return labels[this.preloadOptionIndex()];
+  }
+
+  private directionLabel(): string {
+    if (this.directionIndex === 1) {
+      return '右→左';
+    }
+    return '左→右';
+  }
+
+  private readerModeLabel(): string {
+    const labels: Array<string> = ['单页阅读', '双页阅读', '瀑布连续阅读'];
+    return labels[this.readerModeIndex] ?? labels[0];
+  }
+
+  private doublePageOffsetLabel(): string {
+    return this.doublePageOffset === 1 ?
+      '第 1 页单独、2+3 页…' : '第 1+2 页、3+4 页…';
+  }
+
+  private serverRepository(): ServerConfigRepository {
+    const context: common.UIAbilityContext =
+      this.getUIContext().getHostContext() as common.UIAbilityContext;
+    return new ServerConfigRepository(context);
+  }
+
+  private readerRepository(): ReaderSettingsRepository {
+    const context: common.UIAbilityContext =
+      this.getUIContext().getHostContext() as common.UIAbilityContext;
+    return new ReaderSettingsRepository(context);
+  }
+
+  private libraryRepository(): LibrarySettingsRepository {
+    const context: common.UIAbilityContext =
+      this.getUIContext().getHostContext() as common.UIAbilityContext;
+    return new LibrarySettingsRepository(context);
+  }
+
+  private imageCache(): ImageDiskCache {
+    const context: common.UIAbilityContext =
+      this.getUIContext().getHostContext() as common.UIAbilityContext;
+    return new ImageDiskCache(context);
+  }
+
+  private describeError(error: Object): string {
+    if (error instanceof Error && error.message.length > 0) {
+      return error.message;
+    }
+    return '操作失败，请检查网络和输入内容';
+  }
+}

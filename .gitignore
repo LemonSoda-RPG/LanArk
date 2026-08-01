@@ -1,0 +1,27 @@
+/node_modules
+/oh_modules
+/local.properties
+**/local.properties
+/.idea
+/.preview
+**/.preview
+**/build
+/.hvigor
+**/.hvigor
+.cxx
+/.clangd
+/.clang-format
+/.clang-tidy
+**/.test
+/.appanalyzer
+
+# Local signing material and packaged build outputs
+*.p12
+*.p7b
+*.cer
+*.jks
+*.keystore
+*.pfx
+*.hap
+*.app
+*.log

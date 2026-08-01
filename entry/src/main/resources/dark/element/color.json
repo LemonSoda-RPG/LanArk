@@ -1,0 +1,72 @@
+{
+  "color": [
+    {
+      "name": "start_window_background",
+      "value": "#0F141A"
+    },
+    {
+      "name": "page_background",
+      "value": "#0F141A"
+    },
+    {
+      "name": "surface",
+      "value": "#1A222C"
+    },
+    {
+      "name": "surface_muted",
+      "value": "#25303C"
+    },
+    {
+      "name": "text_primary",
+      "value": "#F2F5F8"
+    },
+    {
+      "name": "text_secondary",
+      "value": "#B6C0CB"
+    },
+    {
+      "name": "text_tertiary",
+      "value": "#8D99A6"
+    },
+    {
+      "name": "accent",
+      "value": "#3F7CFF"
+    },
+    {
+      "name": "accent_soft",
+      "value": "#223657"
+    },
+    {
+      "name": "accent_text",
+      "value": "#AFC8FF"
+    },
+    {
+      "name": "success",
+      "value": "#63D68A"
+    },
+    {
+      "name": "success_soft",
+      "value": "#183825"
+    },
+    {
+      "name": "error",
+      "value": "#FF9B9B"
+    },
+    {
+      "name": "error_soft",
+      "value": "#402329"
+    },
+    {
+      "name": "divider",
+      "value": "#303B47"
+    },
+    {
+      "name": "extension_text",
+      "value": "#B9C9DA"
+    },
+    {
+      "name": "new_badge",
+      "value": "#F05B43"
+    }
+  ]
+}

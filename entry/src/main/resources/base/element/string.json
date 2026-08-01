@@ -1,0 +1,104 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "LANraragi 原生阅读器"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "LanArk 主页面"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "LanArk"
+    },
+    {
+      "name": "setup_subtitle",
+      "value": "连接你的 LANraragi 服务器"
+    },
+    {
+      "name": "server_url_label",
+      "value": "服务器地址"
+    },
+    {
+      "name": "server_url_placeholder",
+      "value": "例如：http://192.168.1.10:3000"
+    },
+    {
+      "name": "api_key_label",
+      "value": "API Key"
+    },
+    {
+      "name": "api_key_placeholder",
+      "value": "未设置密码时可留空"
+    },
+    {
+      "name": "api_key_storage_hint",
+      "value": "API Key 会保存在系统安全凭据存储中"
+    },
+    {
+      "name": "connect",
+      "value": "连接并保存"
+    },
+    {
+      "name": "connecting",
+      "value": "正在连接…"
+    },
+    {
+      "name": "connected",
+      "value": "已连接"
+    },
+    {
+      "name": "server_address",
+      "value": "服务器"
+    },
+    {
+      "name": "server_version",
+      "value": "版本"
+    },
+    {
+      "name": "archives_per_page",
+      "value": "每页档案数"
+    },
+    {
+      "name": "library_title",
+      "value": "档案库"
+    },
+    {
+      "name": "archive_unit",
+      "value": "个档案"
+    },
+    {
+      "name": "refresh",
+      "value": "刷新"
+    },
+    {
+      "name": "search_placeholder",
+      "value": "搜索标题或标签"
+    },
+    {
+      "name": "loading_library",
+      "value": "正在加载档案索引…"
+    },
+    {
+      "name": "empty_library",
+      "value": "没有找到档案"
+    },
+    {
+      "name": "no_tags",
+      "value": "无标签"
+    },
+    {
+      "name": "page_unit",
+      "value": "页"
+    },
+    {
+      "name": "change_server",
+      "value": "修改服务器配置"
+    },
+    {
+      "name": "clear_server",
+      "value": "清除服务器配置"
+    }
+  ]
+}
