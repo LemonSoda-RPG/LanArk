@@ -566,7 +566,7 @@ export struct ArchiveReaderPage {
 
   @Builder
   private doublePageSpread(spread: ReaderSpread) {
-    Row({ space: 1 }) {
+    Row({ space: 0 }) {
       if (this.readDirectionIndex === 1) {
         this.doublePageSlot(spread.laterPage)
         this.doublePageSlot(spread.earlierPage)
