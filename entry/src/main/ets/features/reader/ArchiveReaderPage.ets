@@ -316,6 +316,7 @@ export struct ArchiveReaderPage {
   @State private serverUrl: string = '';
   @State private apiKey: string = '';
   @State private controlsVisible: boolean = false;
+  @State private readerSettingsVisible: boolean = false;
   @State private readDirectionIndex: number = 0;
   @State private readerModeIndex: number = 0;
   @State private doublePageOffset: number = 0;
@@ -559,6 +560,21 @@ export struct ArchiveReaderPage {
               .onClick(() => {
                 this.openArchiveInfo();
               })
+
+            Button() {
+              Image($r('app.media.icon_settings'))
+                .width(23)
+                .height(23)
+                .renderMode(ImageRenderMode.Template)
+                .fillColor(Color.White)
+            }
+              .width(44)
+              .height(44)
+              .backgroundColor('#99000000')
+              .accessibilityText('当前文档阅读设置')
+              .onClick(() => {
+                this.readerSettingsVisible = true;
+              })
           }
           .width('100%')
           .padding({ left: 10, right: 10 })
@@ -603,6 +619,107 @@ export struct ArchiveReaderPage {
           .width('100%')
           .height('100%')
           .hitTestBehavior(HitTestMode.Transparent)
+        }
+
+        if (this.readerSettingsVisible) {
+          Stack({ alignContent: Alignment.Center }) {
+            Column()
+              .width('100%')
+              .height('100%')
+              .backgroundColor('#66000000')
+              .onClick(() => {
+                this.readerSettingsVisible = false;
+              })
+
+            Column({ space: 18 }) {
+              Row() {
+                Text('当前文档阅读设置')
+                  .copyOption(CopyOptions.LocalDevice)
+                  .fontSize(19)
+                  .fontWeight(FontWeight.Bold)
+                  .fontColor(Color.White)
+                  .layoutWeight(1)
+
+              }
+              .width('100%')
+
+              Text('阅读方式')
+                .copyOption(CopyOptions.LocalDevice)
+                .fontSize(14)
+                .fontColor('#CCFFFFFF')
+                .width('100%')
+
+              Row({ space: 8 }) {
+                ForEach(['单页阅读', '双页阅读', '瀑布连续阅读'],
+                  (label: string, index: number) => {
+                    Button() {
+                      Text(label)
+                        .copyOption(CopyOptions.LocalDevice)
+                        .fontSize(14)
+                        .fontColor(Color.White)
+                        .maxLines(1)
+                    }
+                      .layoutWeight(1)
+                      .height(44)
+                      .backgroundColor(this.readerModeIndex === index ?
+                        '#CC3F7CFF' : '#664A5068')
+                      .borderRadius(12)
+                      .onClick(() => {
+                        this.applyCurrentReaderMode(index);
+                      });
+                  },
+                  (label: string) => `reader-mode-${label}`)
+              }
+              .width('100%')
+
+              Divider()
+                .color('#33FFFFFF')
+
+              Text('阅读方向')
+                .copyOption(CopyOptions.LocalDevice)
+                .fontSize(14)
+                .fontColor('#CCFFFFFF')
+                .width('100%')
+
+              Row({ space: 8 }) {
+                ForEach(['从左向右', '从右向左'],
+                  (label: string, index: number) => {
+                    Button() {
+                      Text(label)
+                        .copyOption(CopyOptions.LocalDevice)
+                        .fontSize(14)
+                        .fontColor(Color.White)
+                    }
+                      .layoutWeight(1)
+                      .height(44)
+                      .backgroundColor(this.readDirectionIndex === index ?
+                        '#CC3F7CFF' : '#664A5068')
+                      .borderRadius(12)
+                      .onClick(() => {
+                        this.applyCurrentReaderDirection(index);
+                      });
+                  },
+                  (label: string) => `reader-direction-${label}`)
+              }
+              .width('100%')
+
+              Text('仅对当前文档生效，不会修改设置页中的全局默认值')
+                .copyOption(CopyOptions.LocalDevice)
+                .fontSize(12)
+                .fontColor('#99FFFFFF')
+                .width('100%')
+            }
+            .width('88%')
+            .padding(20)
+            .backgroundColor('#E61C2434')
+            .borderRadius(24)
+            .border({ width: 1, color: '#55FFFFFF' })
+            .shadow({ radius: 24, color: '#99000000', offsetX: 0, offsetY: 8 })
+          }
+          .width('100%')
+          .height('100%')
+          .position({ x: 0, y: 0 })
+          .zIndex(20)
         }
       }
       .width('100%')
@@ -837,6 +954,30 @@ export struct ArchiveReaderPage {
       return Math.min(Math.max(pageIndex, 0), Math.max(this.pages.length - 1, 0));
     }
     return this.spreadDataSource.getData(this.spreadIndexForPage(pageIndex)).endIndex;
+  }
+
+  private applyCurrentReaderMode(modeIndex: number): void {
+    const normalizedMode: number = Math.min(Math.max(modeIndex, 0), 2);
+    if (normalizedMode === this.readerModeIndex) {
+      return;
+    }
+    const currentPage: number = this.currentPageIndex;
+    this.readerModeIndex = normalizedMode;
+    this.pageZoomScale = 1;
+    this.waterfallScale = 1;
+    if (normalizedMode === 1) {
+      this.rebuildSpreads();
+      this.currentPageIndex = this.spreadEndIndexForPage(currentPage);
+    } else {
+      this.currentPageIndex = Math.min(
+        Math.max(currentPage, 0),
+        Math.max(this.pages.length - 1, 0)
+      );
+    }
+  }
+
+  private applyCurrentReaderDirection(directionIndex: number): void {
+    this.readDirectionIndex = directionIndex === 1 ? 1 : 0;
   }
 
   private toggleDoublePageOffset(): void {
