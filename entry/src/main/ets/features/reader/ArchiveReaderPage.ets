@@ -1,4 +1,5 @@
 import { common } from '@kit.AbilityKit';
+import { window } from '@kit.ArkUI';
 import { image } from '@kit.ImageKit';
 import { ImageDiskCache } from '../../data/cache/ImageDiskCache';
 import {
@@ -328,12 +329,20 @@ export struct ArchiveReaderPage {
   private verticalScroller: Scroller = new Scroller();
   private pageDataSource: ReaderPageDataSource = new ReaderPageDataSource();
   private spreadDataSource: ReaderSpreadDataSource = new ReaderSpreadDataSource();
+  private readerFullscreenEnabled: boolean = false;
+  private readerWindowRequestId: number = 0;
 
   aboutToAppear(): void {
+    this.enterReaderFullscreen();
     this.loadPages();
   }
 
+  aboutToDisappear(): void {
+    this.restoreReaderWindow();
+  }
+
   aboutToBeDeleted(): void {
+    this.restoreReaderWindow();
     if (this.params.archive.id.length === 0) {
       return;
     }
@@ -593,10 +602,17 @@ export struct ArchiveReaderPage {
         }
       }
       .width('100%')
-      .height('100%')
+      .height(LayoutPolicy.matchParent)
+      .ignoreLayoutSafeArea()
       .backgroundColor(Color.Black)
     }
     .hideTitleBar(true)
+    .onActive(() => {
+      this.enterReaderFullscreen();
+    })
+    .onInactive(() => {
+      this.restoreReaderWindow();
+    })
   }
 
   @Builder
@@ -887,7 +903,52 @@ export struct ArchiveReaderPage {
       // is synchronous, so the library card is refreshed immediately.
       this.syncProgress(this.pages[this.currentPageIndex]);
     }
+    this.restoreReaderWindow();
     this.pathStack.pop();
+  }
+
+  private enterReaderFullscreen(): void {
+    if (this.readerFullscreenEnabled) {
+      return;
+    }
+    this.readerFullscreenEnabled = true;
+    this.updateReaderWindow(true);
+  }
+
+  private restoreReaderWindow(): void {
+    if (!this.readerFullscreenEnabled) {
+      return;
+    }
+    this.readerFullscreenEnabled = false;
+    this.updateReaderWindow(false);
+  }
+
+  private updateReaderWindow(fullscreen: boolean): void {
+    const requestId: number = ++this.readerWindowRequestId;
+    this.applyReaderWindow(fullscreen, requestId);
+  }
+
+  private async applyReaderWindow(fullscreen: boolean, requestId: number): Promise<void> {
+    try {
+      const context: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const mainWindow: window.Window = await window.getLastWindow(context);
+      if (requestId !== this.readerWindowRequestId) {
+        return;
+      }
+      await mainWindow.setWindowLayoutFullScreen(fullscreen);
+      if (requestId !== this.readerWindowRequestId) {
+        return;
+      }
+      await mainWindow.setSpecificSystemBarEnabled('status', !fullscreen, false);
+      if (requestId !== this.readerWindowRequestId) {
+        return;
+      }
+      // Keep the navigation indicator hidden, matching the app-wide reader UI.
+      await mainWindow.setSpecificSystemBarEnabled('navigationIndicator', false, false);
+    } catch (error) {
+      // Full-screen chrome is optional and must not interrupt reading.
+    }
   }
 
   private openArchiveInfo(): void {
