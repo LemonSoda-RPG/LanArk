@@ -940,12 +940,13 @@ export struct ArchiveReaderPage {
       if (requestId !== this.readerWindowRequestId) {
         return;
       }
-      await mainWindow.setSpecificSystemBarEnabled('status', !fullscreen, false);
-      if (requestId !== this.readerWindowRequestId) {
-        return;
+      if (fullscreen) {
+        // Hide both status and navigation system bars for true reader fullscreen.
+        await mainWindow.setWindowSystemBarEnable([]);
+      } else {
+        // Restore the status bar while keeping the app's bottom gesture indicator hidden.
+        await mainWindow.setWindowSystemBarEnable(['status']);
       }
-      // Keep the navigation indicator hidden, matching the app-wide reader UI.
-      await mainWindow.setSpecificSystemBarEnabled('navigationIndicator', false, false);
     } catch (error) {
       // Full-screen chrome is optional and must not interrupt reading.
     }
