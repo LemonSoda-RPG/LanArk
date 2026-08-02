@@ -658,6 +658,7 @@ export struct ArchiveReaderPage {
                         .fontSize(14)
                         .fontColor(Color.White)
                         .maxLines(1)
+                        .hitTestBehavior(HitTestMode.None)
                     }
                       .layoutWeight(1)
                       .height(44)
@@ -689,6 +690,7 @@ export struct ArchiveReaderPage {
                         .copyOption(CopyOptions.LocalDevice)
                         .fontSize(14)
                         .fontColor(Color.White)
+                        .hitTestBehavior(HitTestMode.None)
                     }
                       .layoutWeight(1)
                       .height(44)
