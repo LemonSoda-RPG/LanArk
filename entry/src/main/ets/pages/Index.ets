@@ -670,7 +670,7 @@ struct Index {
           .scrollBar(BarState.Auto)
           .onAreaChange((oldValue: Area, newValue: Area) => {
             if (typeof newValue.width === 'number' && newValue.width > 0) {
-              this.updateLibraryContentWidth(newValue.width);
+              this.updateLibraryContentWidthVp(newValue.width);
             }
           })
         } else {
@@ -1433,6 +1433,10 @@ struct Index {
 
   private updateLibraryContentWidth(widthPx: number): void {
     const widthVp: number = this.getUIContext().px2vp(widthPx);
+    this.updateLibraryContentWidthVp(widthVp);
+  }
+
+  private updateLibraryContentWidthVp(widthVp: number): void {
     if (widthVp > 0 && Math.abs(widthVp - this.libraryContentWidth) > 0.5) {
       this.libraryContentWidth = widthVp;
     }
