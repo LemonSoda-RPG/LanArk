@@ -274,6 +274,7 @@ struct Index {
       if (typeof newValue.width === 'number' && newValue.width > 0 &&
         typeof newValue.height === 'number' && newValue.height > 0) {
         this.libraryLandscape = newValue.width > newValue.height;
+        this.updateLibraryContentWidth(newValue.width);
         this.applyLibraryWindowBars();
       }
     })
@@ -669,7 +670,7 @@ struct Index {
           .scrollBar(BarState.Auto)
           .onAreaChange((oldValue: Area, newValue: Area) => {
             if (typeof newValue.width === 'number' && newValue.width > 0) {
-              this.libraryContentWidth = this.getUIContext().px2vp(newValue.width);
+              this.updateLibraryContentWidth(newValue.width);
             }
           })
         } else {
@@ -1247,6 +1248,7 @@ struct Index {
       const rect = mainWindow.getWindowProperties().windowRect;
       if (rect.width > 0 && rect.height > 0) {
         this.libraryLandscape = rect.width > rect.height;
+        this.updateLibraryContentWidth(rect.width);
         this.applyLibraryWindowBars();
       }
     } catch (error) {
@@ -1417,7 +1419,7 @@ struct Index {
     if (this.gridColumns > 0) {
       return this.gridColumns;
     }
-    const minimumCardWidth: number = 180;
+    const minimumCardWidth: number = 160;
     const gap: number = 10;
     const estimated: number = Math.floor((this.libraryContentWidth + gap) /
       (minimumCardWidth + gap));
@@ -1427,6 +1429,13 @@ struct Index {
   private gridColumnsTemplate(): string {
     const columns: number = this.effectiveGridColumns();
     return `${'1fr '.repeat(columns)}`.trim();
+  }
+
+  private updateLibraryContentWidth(widthPx: number): void {
+    const widthVp: number = this.getUIContext().px2vp(widthPx);
+    if (widthVp > 0 && Math.abs(widthVp - this.libraryContentWidth) > 0.5) {
+      this.libraryContentWidth = widthVp;
+    }
   }
 
   private async clearConfig(): Promise<void> {

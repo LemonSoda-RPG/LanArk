@@ -315,12 +315,10 @@ export struct ArchiveReaderPage {
   @State private errorMessage: string = '';
   @State private serverUrl: string = '';
   @State private apiKey: string = '';
-  @State private controlsVisible: boolean = true;
+  @State private controlsVisible: boolean = false;
   @State private readDirectionIndex: number = 0;
   @State private readerModeIndex: number = 0;
   @State private doublePageOffset: number = 0;
-  @State private tapPagingEnabled: boolean = true;
-  @State private initialControlsVisible: boolean = true;
   @State private preloadPageCount: number = 3;
   @State private readerViewportWidth: number = 1;
   @State private waterfallScale: number = 1;
@@ -413,8 +411,13 @@ export struct ArchiveReaderPage {
             .onScrollIndex((start: number, end: number, center: number) => {
               this.onVisiblePageChanged(center);
             })
-            .onClick(() => {
-              this.controlsVisible = !this.controlsVisible;
+            .onAreaChange((oldValue: Area, newValue: Area) => {
+              if (typeof newValue.width === 'number' && newValue.width > 0) {
+                this.readerViewportWidth = newValue.width;
+              }
+            })
+            .onClick((event: ClickEvent) => {
+              this.toggleControlsFromCenter(event.x);
             })
             .gesture(
               PinchGesture({ fingers: 2 })
@@ -668,9 +671,7 @@ export struct ArchiveReaderPage {
         this.readDirectionIndex = settings.directionIndex;
         this.readerModeIndex = settings.modeIndex;
         this.doublePageOffset = settings.doublePageOffset;
-        this.tapPagingEnabled = settings.tapPagingEnabled;
-        this.initialControlsVisible = settings.initialControlsVisible;
-        this.controlsVisible = settings.initialControlsVisible;
+        this.controlsVisible = false;
         this.preloadPageCount = settings.preloadPageCount;
       } catch (settingsError) {
         // Reader defaults remain available if local preferences cannot be read.
@@ -742,10 +743,6 @@ export struct ArchiveReaderPage {
   }
 
   private handleHorizontalTap(localX: number): void {
-    if (!this.tapPagingEnabled) {
-      this.controlsVisible = !this.controlsVisible;
-      return;
-    }
     const leftBoundary: number = this.readerViewportWidth * 0.3;
     const rightBoundary: number = this.readerViewportWidth * 0.7;
     if (localX < leftBoundary) {
@@ -756,7 +753,15 @@ export struct ArchiveReaderPage {
       this.goToReadingStep(this.readDirectionIndex === 1 ? -1 : 1);
       return;
     }
-    this.controlsVisible = !this.controlsVisible;
+    this.toggleControlsFromCenter(localX);
+  }
+
+  private toggleControlsFromCenter(localX: number): void {
+    const centerBoundary: number = this.readerViewportWidth * 0.35;
+    const rightBoundary: number = this.readerViewportWidth * 0.65;
+    if (localX >= centerBoundary && localX <= rightBoundary) {
+      this.controlsVisible = !this.controlsVisible;
+    }
   }
 
   private moveReaderToIndex(targetIndex: number): void {
@@ -853,8 +858,6 @@ export struct ArchiveReaderPage {
         this.readDirectionIndex,
         this.readerModeIndex,
         this.doublePageOffset,
-        this.tapPagingEnabled,
-        this.initialControlsVisible,
         this.preloadPageCount
       ));
     } catch (error) {

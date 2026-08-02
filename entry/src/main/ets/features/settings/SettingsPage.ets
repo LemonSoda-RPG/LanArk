@@ -31,8 +31,6 @@ export struct SettingsPage {
   @State private directionIndex: number = 0;
   @State private readerModeIndex: number = 0;
   @State private doublePageOffset: number = 0;
-  @State private tapPagingEnabled: boolean = true;
-  @State private initialControlsVisible: boolean = true;
   @State private preloadPageCount: number = 3;
   @State private hideCompleted: boolean = false;
   @State private gridLayout: boolean = false;
@@ -505,18 +503,18 @@ export struct SettingsPage {
         }
         .layoutWeight(1)
 
-        Toggle({ type: ToggleType.Switch, isOn: this.tapPagingEnabled })
+        Toggle({ type: ToggleType.Switch, isOn: true })
           .selectedColor($r('app.color.accent'))
           .onChange((value: boolean) => {
-            this.tapPagingEnabled = value;
             this.saveReaderSettings();
           })
       }
       .width('100%')
       .height(66)
       .padding({ top: 8, bottom: 8 })
+      .visibility(Visibility.None)
 
-      Divider().color($r('app.color.divider'))
+      Divider().color($r('app.color.divider')).visibility(Visibility.None)
 
       Row({ space: 12 }) {
         Column({ space: 3 }) {
@@ -535,16 +533,16 @@ export struct SettingsPage {
         }
         .layoutWeight(1)
 
-        Toggle({ type: ToggleType.Switch, isOn: this.initialControlsVisible })
+        Toggle({ type: ToggleType.Switch, isOn: false })
           .selectedColor($r('app.color.accent'))
           .onChange((value: boolean) => {
-            this.initialControlsVisible = value;
             this.saveReaderSettings();
           })
       }
       .width('100%')
       .height(66)
       .padding({ top: 8, bottom: 8 })
+      .visibility(Visibility.None)
 
       if (this.readerMessage.length > 0) {
         Text(this.readerMessage)
@@ -835,8 +833,6 @@ export struct SettingsPage {
       this.directionIndex,
       this.readerModeIndex,
       this.doublePageOffset,
-      this.tapPagingEnabled,
-      this.initialControlsVisible,
       this.preloadPageCount
     );
   }
@@ -845,8 +841,6 @@ export struct SettingsPage {
     this.directionIndex = settings.directionIndex;
     this.readerModeIndex = settings.modeIndex;
     this.doublePageOffset = settings.doublePageOffset;
-    this.tapPagingEnabled = settings.tapPagingEnabled;
-    this.initialControlsVisible = settings.initialControlsVisible;
     this.preloadPageCount = settings.preloadPageCount;
   }
 

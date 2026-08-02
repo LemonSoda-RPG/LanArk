@@ -5,31 +5,23 @@ const PREFERENCES_NAME: string = 'lanark_reader_settings';
 const DIRECTION_KEY: string = 'reader_direction';
 const MODE_KEY: string = 'reader_mode';
 const DOUBLE_PAGE_OFFSET_KEY: string = 'reader_double_page_offset';
-const TAP_PAGING_KEY: string = 'reader_tap_paging';
-const INITIAL_CONTROLS_KEY: string = 'reader_initial_controls';
 const PRELOAD_PAGE_COUNT_KEY: string = 'reader_preload_page_count';
 
 export class ReaderSettings {
   readonly directionIndex: number;
   readonly modeIndex: number;
   readonly doublePageOffset: number;
-  readonly tapPagingEnabled: boolean;
-  readonly initialControlsVisible: boolean;
   readonly preloadPageCount: number;
 
   constructor(
     directionIndex: number = 0,
     modeIndex: number = 0,
     doublePageOffset: number = 0,
-    tapPagingEnabled: boolean = true,
-    initialControlsVisible: boolean = true,
     preloadPageCount: number = 3
   ) {
     this.directionIndex = Math.min(Math.max(directionIndex, 0), 1);
     this.modeIndex = Math.min(Math.max(modeIndex, 0), 2);
     this.doublePageOffset = doublePageOffset === 1 ? 1 : 0;
-    this.tapPagingEnabled = tapPagingEnabled;
-    this.initialControlsVisible = initialControlsVisible;
     this.preloadPageCount = ReaderSettings.normalizePreloadPageCount(preloadPageCount);
   }
 
@@ -58,18 +50,12 @@ export class ReaderSettingsRepository {
       const normalizedDirection: number = direction === 1 ? 1 : 0;
       const doublePageOffset: number =
         (await store.get(DOUBLE_PAGE_OFFSET_KEY, 0)) as number;
-      const tapPaging: boolean =
-        (await store.get(TAP_PAGING_KEY, true)) as boolean;
-      const initialControls: boolean =
-        (await store.get(INITIAL_CONTROLS_KEY, true)) as boolean;
       const preloadPageCount: number =
         (await store.get(PRELOAD_PAGE_COUNT_KEY, 3)) as number;
       return new ReaderSettings(
         normalizedDirection,
         mode,
         doublePageOffset,
-        tapPaging,
-        initialControls,
         preloadPageCount
       );
     } catch (error) {
@@ -84,8 +70,6 @@ export class ReaderSettingsRepository {
       await store.put(DIRECTION_KEY, settings.directionIndex);
       await store.put(MODE_KEY, settings.modeIndex);
       await store.put(DOUBLE_PAGE_OFFSET_KEY, settings.doublePageOffset);
-      await store.put(TAP_PAGING_KEY, settings.tapPagingEnabled);
-      await store.put(INITIAL_CONTROLS_KEY, settings.initialControlsVisible);
       await store.put(PRELOAD_PAGE_COUNT_KEY, settings.preloadPageCount);
       await store.flush();
     } catch (error) {
