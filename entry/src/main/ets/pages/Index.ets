@@ -82,6 +82,7 @@ struct ArchiveProgressText {
       .fontSize(this.fontSize)
       .fontColor($r('app.color.text_secondary'))
       .width('100%')
+      .hitTestBehavior(HitTestMode.None)
   }
 }
 
@@ -102,6 +103,7 @@ struct ArchiveNewBadge {
         .backgroundColor($r('app.color.new_badge'))
         .borderRadius(6)
         .margin({ top: this.marginTop, right: this.marginRight })
+        .hitTestBehavior(HitTestMode.None)
     }
   }
 }
@@ -140,6 +142,7 @@ struct ArchiveCoverView {
           .fontSize(11)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.extension_text'))
+          .hitTestBehavior(HitTestMode.None)
         if (this.isLoading) {
           LoadingProgress()
             .width(22)
@@ -738,12 +741,14 @@ struct Index {
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .layoutWeight(1)
+        .hitTestBehavior(HitTestMode.None)
       if (this.selectedCategoryId === categoryId) {
         Text('✓')
           .copyOption(CopyOptions.LocalDevice)
           .fontSize(16)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.accent'))
+          .hitTestBehavior(HitTestMode.None)
       }
     }
     .width('100%')
@@ -824,12 +829,14 @@ struct Index {
         .fontColor(this.sortModeIndex === index ?
           $r('app.color.accent_text') : $r('app.color.text_primary'))
         .layoutWeight(1)
+        .hitTestBehavior(HitTestMode.None)
       if (this.sortModeIndex === index) {
         Text('✓')
           .copyOption(CopyOptions.LocalDevice)
           .fontSize(16)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.accent'))
+          .hitTestBehavior(HitTestMode.None)
       }
     }
     .width('100%')
@@ -867,6 +874,9 @@ struct Index {
             .maxLines(2)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .layoutWeight(1)
+            .onClick(() => {
+              this.openArchiveReader(archive);
+            })
           ArchiveNewBadge({ archive: archive })
         }
         .width('100%')
@@ -879,6 +889,9 @@ struct Index {
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .width('100%')
+          .onClick(() => {
+            this.openArchiveReader(archive);
+          })
 
         ArchiveProgressText({ archive: archive, fontSize: 12 })
 
@@ -944,6 +957,9 @@ struct Index {
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .width('100%')
+        .onClick(() => {
+          this.openArchiveReader(archive);
+        })
 
       ArchiveProgressText({ archive: archive, fontSize: 11 })
 

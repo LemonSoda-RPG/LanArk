@@ -145,6 +145,7 @@ export struct ArchiveInfoPage {
                 .lineHeight(19)
                 .fontColor($r('app.color.accent_text'))
                 .maxLines(3)
+                .hitTestBehavior(HitTestMode.None)
             }
             .constraintSize({ maxWidth: '100%' })
             .padding({ left: 10, right: 10, top: 7, bottom: 7 })
