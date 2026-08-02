@@ -274,7 +274,6 @@ struct Index {
       if (typeof newValue.width === 'number' && newValue.width > 0 &&
         typeof newValue.height === 'number' && newValue.height > 0) {
         this.libraryLandscape = newValue.width > newValue.height;
-        this.updateLibraryContentWidth(newValue.width);
         this.applyLibraryWindowBars();
       }
     })
