@@ -6,6 +6,7 @@ const DOMAIN: number = 0x0000;
 
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    AppStorage.setOrCreate('lanarkReaderFullscreen', false);
     try {
       this.context.getApplicationContext()
         .setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
@@ -41,7 +42,25 @@ export default class EntryAbility extends UIAbility {
           JSON.stringify(error)
         );
       });
-      mainWindow.setSpecificSystemBarEnabled('navigationIndicator', false, true)
+      mainWindow.setSpecificSystemBarEnabled('status', true, false)
+        .catch((error: Object) => {
+          hilog.error(
+            DOMAIN,
+            'LanArk',
+            'Failed to show the portrait status bar. Cause: %{public}s',
+            JSON.stringify(error)
+          );
+        });
+      mainWindow.setSpecificSystemBarEnabled('navigation', false, false)
+        .catch((error: Object) => {
+          hilog.error(
+            DOMAIN,
+            'LanArk',
+            'Failed to hide the navigation bar. Cause: %{public}s',
+            JSON.stringify(error)
+          );
+        });
+      mainWindow.setSpecificSystemBarEnabled('navigationIndicator', false, false)
         .catch((error: Object) => {
           hilog.error(
             DOMAIN,
@@ -50,6 +69,10 @@ export default class EntryAbility extends UIAbility {
             JSON.stringify(error)
           );
         });
+      setTimeout(() => {
+        mainWindow.setSpecificSystemBarEnabled('navigationIndicator', false, false)
+          .catch(() => {});
+      }, 400);
     } catch (error) {
       hilog.error(
         DOMAIN,

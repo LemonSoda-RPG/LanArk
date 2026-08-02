@@ -308,6 +308,7 @@ export struct ArchiveReaderPage {
   params: ReaderRouteParams = emptyRouteParams();
   onProgressChanged: (archiveId: string, pageNumber: number) => void =
     (archiveId: string, pageNumber: number): void => {};
+  onReaderFullscreenChanged: (active: boolean) => void = (active: boolean): void => {};
   @State private pages: Array<ReaderPage> = [];
   @State private currentPageIndex: number = 0;
   @State private isLoading: boolean = false;
@@ -912,6 +913,8 @@ export struct ArchiveReaderPage {
       return;
     }
     this.readerFullscreenEnabled = true;
+    AppStorage.setOrCreate('lanarkReaderFullscreen', true);
+    this.onReaderFullscreenChanged(true);
     this.updateReaderWindow(true);
   }
 
@@ -936,19 +939,26 @@ export struct ArchiveReaderPage {
       if (requestId !== this.readerWindowRequestId) {
         return;
       }
-      await mainWindow.setWindowLayoutFullScreen(fullscreen);
+        await mainWindow.setWindowLayoutFullScreen(fullscreen);
       if (requestId !== this.readerWindowRequestId) {
         return;
       }
-      if (fullscreen) {
-        // Hide both status and navigation system bars for true reader fullscreen.
-        await mainWindow.setWindowSystemBarEnable([]);
-      } else {
-        // Restore the status bar while keeping the app's bottom gesture indicator hidden.
-        await mainWindow.setWindowSystemBarEnable(['status']);
-      }
-    } catch (error) {
+        // Keep the window immersive and explicitly control each system bar. This avoids
+        // the platform re-enabling the navigation indicator after leaving the reader.
+        await mainWindow.setSpecificSystemBarEnabled('status', !fullscreen, false);
+        await mainWindow.setSpecificSystemBarEnabled('navigation', false, false);
+        await mainWindow.setSpecificSystemBarEnabled('navigationIndicator', false, false);
+        setTimeout(() => {
+          mainWindow.setSpecificSystemBarEnabled('navigationIndicator', false, false)
+            .catch(() => {});
+        }, 400);
+      } catch (error) {
       // Full-screen chrome is optional and must not interrupt reading.
+    } finally {
+      if (!fullscreen && requestId === this.readerWindowRequestId) {
+        AppStorage.setOrCreate('lanarkReaderFullscreen', false);
+        this.onReaderFullscreenChanged(false);
+      }
     }
   }
 

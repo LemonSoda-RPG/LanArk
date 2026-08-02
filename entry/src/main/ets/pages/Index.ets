@@ -1,4 +1,5 @@
 import { common } from '@kit.AbilityKit';
+import { window } from '@kit.ArkUI';
 import { image } from '@kit.ImageKit';
 import { ImageDiskCache } from '../data/cache/ImageDiskCache';
 import {
@@ -234,10 +235,14 @@ struct Index {
   private completeArchiveIndex: Array<ArchiveItem> = [];
   private archiveDataSource: ArchiveDataSource = new ArchiveDataSource();
   private progressPersistTimer: number = -1;
+  private libraryLandscape: boolean = false;
+  private readerFullscreenActive: boolean = false;
+  private libraryWindowRequestId: number = 0;
 
   aboutToAppear(): void {
     this.restoreLibrarySettings();
     this.restoreConfig();
+    this.refreshLibraryWindowSize();
   }
 
   onBackPress(): boolean {
@@ -265,6 +270,13 @@ struct Index {
     .navDestination(this.pageRouter)
     .width('100%')
     .height('100%')
+    .onAreaChange((oldValue: Area, newValue: Area) => {
+      if (typeof newValue.width === 'number' && newValue.width > 0 &&
+        typeof newValue.height === 'number' && newValue.height > 0) {
+        this.libraryLandscape = newValue.width > newValue.height;
+        this.applyLibraryWindowBars();
+      }
+    })
     .backgroundColor($r('app.color.page_background'))
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
   }
@@ -278,6 +290,12 @@ struct Index {
         params: param as ReaderRouteParams,
         onProgressChanged: (archiveId: string, pageNumber: number): void => {
           this.updateArchiveProgress(archiveId, pageNumber);
+        },
+        onReaderFullscreenChanged: (active: boolean): void => {
+          this.readerFullscreenActive = active;
+          if (!active) {
+            this.applyLibraryWindowBars();
+          }
         }
       })
     } else if (name === 'ArchiveInfo') {
@@ -1219,6 +1237,57 @@ struct Index {
   private sortModeLabel(): string {
     const labels: Array<string> = this.sortModeLabels();
     return labels[this.sortModeIndex] ?? labels[0];
+  }
+
+  private async refreshLibraryWindowSize(): Promise<void> {
+    try {
+      const context: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const mainWindow: window.Window = await window.getLastWindow(context);
+      const rect = mainWindow.getWindowProperties().windowRect;
+      if (rect.width > 0 && rect.height > 0) {
+        this.libraryLandscape = rect.width > rect.height;
+        this.applyLibraryWindowBars();
+      }
+    } catch (error) {
+      // The initial window size will be picked up by onAreaChange.
+    }
+  }
+
+  private applyLibraryWindowBars(): void {
+    if (this.readerFullscreenActive || AppStorage.get<boolean>('lanarkReaderFullscreen') === true) {
+      return;
+    }
+    const requestId: number = ++this.libraryWindowRequestId;
+    this.applyLibraryWindowBarsAsync(requestId);
+  }
+
+  private async applyLibraryWindowBarsAsync(requestId: number): Promise<void> {
+    try {
+      const context: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const mainWindow: window.Window = await window.getLastWindow(context);
+      if (requestId !== this.libraryWindowRequestId ||
+        this.readerFullscreenActive || AppStorage.get<boolean>('lanarkReaderFullscreen') === true) {
+        return;
+      }
+      await mainWindow.setWindowLayoutFullScreen(this.libraryLandscape);
+      if (requestId !== this.libraryWindowRequestId ||
+        this.readerFullscreenActive || AppStorage.get<boolean>('lanarkReaderFullscreen') === true) {
+        return;
+      }
+        await mainWindow.setSpecificSystemBarEnabled('status', !this.libraryLandscape, false);
+        await mainWindow.setSpecificSystemBarEnabled('navigation', false, false);
+        await mainWindow.setSpecificSystemBarEnabled('navigationIndicator', false, false);
+        // The system applies bar visibility asynchronously; repeat after the transition
+        // so returning from an immersive reader cannot bring the gesture pill back.
+        setTimeout(() => {
+          mainWindow.setSpecificSystemBarEnabled('navigationIndicator', false, false)
+            .catch(() => {});
+        }, 400);
+      } catch (error) {
+      // System bar visibility must not interrupt library browsing.
+    }
   }
 
   private openArchiveReader(archive: ArchiveItem): void {
