@@ -32,6 +32,7 @@ export struct SettingsPage {
   @State private readerModeIndex: number = 0;
   @State private doublePageOffset: number = 0;
   @State private preloadPageCount: number = 3;
+  @State private interpolationIndex: number = 3;
   @State private hideCompleted: boolean = false;
   @State private gridLayout: boolean = false;
   @State private gridColumns: number = 0;
@@ -486,6 +487,45 @@ export struct SettingsPage {
 
       Divider().color($r('app.color.divider'))
 
+      Column({ space: 8 }) {
+        Text('\u56fe\u7247\u63d2\u503c\u65b9\u5f0f')
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+          .width('100%')
+        Text('\u8bbe\u7f6e\u9605\u8bfb\u5668\u7f29\u653e\u56fe\u7247\u65f6\u7684\u63d2\u503c\u65b9\u5f0f\uff0c\u89e3\u7801\u5c3a\u5bf8\u4fdd\u6301\u56fa\u5b9a')
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(12)
+          .lineHeight(17)
+          .fontColor($r('app.color.text_tertiary'))
+          .width('100%')
+        Select([
+          { value: '\u5173\u95ed\uff08\u6700\u8fd1\u90bb\uff09' },
+          { value: '\u4f4e\uff08\u53cc\u7ebf\u6027\uff09' },
+          { value: '\u4e2d\uff08MipMap\uff09' },
+          { value: '\u9ad8\uff08\u4e09\u6b21\u63d2\u503c\uff09' }
+        ])
+          .selected(this.interpolationIndex)
+          .value(this.interpolationLabel())
+          .height(46)
+          .fontColor($r('app.color.text_primary'))
+          .selectedOptionFontColor(Color.White)
+          .selectedOptionBgColor($r('app.color.accent'))
+          .optionFontColor($r('app.color.text_primary'))
+          .optionBgColor($r('app.color.surface'))
+          .backgroundColor($r('app.color.surface_muted'))
+          .width('100%')
+          .onSelect((index: number, value: string) => {
+            this.interpolationIndex = Math.min(Math.max(index, 0), 3);
+            this.saveReaderSettings();
+          })
+      }
+      .width('100%')
+      .padding({ top: 10, bottom: 10 })
+
+      Divider().color($r('app.color.divider'))
+
       Row({ space: 12 }) {
         Column({ space: 3 }) {
           Text('点击区域翻页')
@@ -833,7 +873,8 @@ export struct SettingsPage {
       this.directionIndex,
       this.readerModeIndex,
       this.doublePageOffset,
-      this.preloadPageCount
+      this.preloadPageCount,
+      this.interpolationIndex
     );
   }
 
@@ -842,6 +883,7 @@ export struct SettingsPage {
     this.readerModeIndex = settings.modeIndex;
     this.doublePageOffset = settings.doublePageOffset;
     this.preloadPageCount = settings.preloadPageCount;
+    this.interpolationIndex = settings.interpolationIndex;
   }
 
   private preloadOptionIndex(): number {
@@ -860,6 +902,16 @@ export struct SettingsPage {
       '8 页'
     ];
     return labels[this.preloadOptionIndex()];
+  }
+
+  private interpolationLabel(): string {
+    const labels: Array<string> = [
+      '\u5173\u95ed\uff08\u6700\u8fd1\u90bb\uff09',
+      '\u4f4e\uff08\u53cc\u7ebf\u6027\uff09',
+      '\u4e2d\uff08MipMap\uff09',
+      '\u9ad8\uff08\u4e09\u6b21\u63d2\u503c\uff09'
+    ];
+    return labels[Math.min(Math.max(this.interpolationIndex, 0), 3)];
   }
 
   private directionLabel(): string {

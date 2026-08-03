@@ -157,6 +157,7 @@ struct ReaderImageView {
   // the parent changes the reading width. Keeping it on the page component
   // avoids scaling the List viewport itself.
   @Prop contentWidthPercent: number = 100;
+  @Prop interpolationIndex: number = 3;
   onZoomChanged: (scale: number) => void = (scale: number): void => {};
   @State private pixelMap: image.PixelMap | undefined = undefined;
   @State private isLoading: boolean = false;
@@ -228,20 +229,20 @@ struct ReaderImageView {
               .width('100%')
               .aspectRatio(this.imageAspectRatio)
               .objectFit(ImageFit.Fill)
-              .interpolation(ImageInterpolation.High)
+              .interpolation(this.imageInterpolation())
           } else {
             Image(this.pixelMap as image.PixelMap)
               .height('100%')
               .aspectRatio(this.imageAspectRatio)
               .objectFit(ImageFit.Fill)
-              .interpolation(ImageInterpolation.High)
+              .interpolation(this.imageInterpolation())
           }
         } else {
           Image(this.pixelMap as image.PixelMap)
             .width('100%')
             .height('100%')
             .objectFit(ImageFit.Contain)
-            .interpolation(ImageInterpolation.High)
+            .interpolation(this.imageInterpolation())
         }
       } else if (this.isLoading) {
         Column({ space: 12 }) {
@@ -279,6 +280,19 @@ struct ReaderImageView {
       return true;
     }
     return this.imageAspectRatio >= this.viewportWidth / this.viewportHeight;
+  }
+
+  private imageInterpolation(): ImageInterpolation {
+    switch (this.interpolationIndex) {
+      case 0:
+        return ImageInterpolation.None;
+      case 1:
+        return ImageInterpolation.Low;
+      case 2:
+        return ImageInterpolation.Medium;
+      default:
+        return ImageInterpolation.High;
+    }
   }
 
   private async loadImage(): Promise<void> {
@@ -357,6 +371,7 @@ export struct ArchiveReaderPage {
   @State private readerModeIndex: number = 0;
   @State private doublePageOffset: number = 0;
   @State private preloadPageCount: number = 3;
+  @State private interpolationIndex: number = 3;
   @State private readerViewportWidth: number = 1;
   @State private waterfallScale: number = 1;
   @State private pageZoomScale: number = 1;
@@ -432,7 +447,8 @@ export struct ArchiveReaderPage {
                       serverUrl: this.serverUrl,
                       apiKey: this.apiKey,
                       continuous: true,
-                      contentWidthPercent: this.waterfallScale * 100
+                      contentWidthPercent: this.waterfallScale * 100,
+                      interpolationIndex: this.interpolationIndex
                     })
                   }
                   .width('100%')
@@ -506,6 +522,7 @@ export struct ArchiveReaderPage {
                   serverUrl: this.serverUrl,
                   apiKey: this.apiKey,
                   continuous: false,
+                  interpolationIndex: this.interpolationIndex,
                   onZoomChanged: (scale: number): void => {
                     this.pageZoomScale = scale;
                   }
@@ -802,6 +819,7 @@ export struct ArchiveReaderPage {
           continuous: false,
           doublePage: true,
           imageAlignment: alignment,
+          interpolationIndex: this.interpolationIndex,
           onZoomChanged: (scale: number): void => {
             this.pageZoomScale = scale;
           }
@@ -828,6 +846,7 @@ export struct ArchiveReaderPage {
         this.doublePageOffset = settings.doublePageOffset;
         this.controlsVisible = false;
         this.preloadPageCount = settings.preloadPageCount;
+        this.interpolationIndex = settings.interpolationIndex;
       } catch (settingsError) {
         // Reader defaults remain available if local preferences cannot be read.
       }
@@ -1037,7 +1056,8 @@ export struct ArchiveReaderPage {
         this.readDirectionIndex,
         this.readerModeIndex,
         this.doublePageOffset,
-        this.preloadPageCount
+        this.preloadPageCount,
+        this.interpolationIndex
       ));
     } catch (error) {
       // A temporary preference failure must not interrupt reading.
