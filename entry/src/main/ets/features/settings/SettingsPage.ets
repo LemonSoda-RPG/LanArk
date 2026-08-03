@@ -14,6 +14,7 @@ import {
 import { ServerConfigRepository } from '../../data/config/ServerConfigRepository';
 import { LanraragiApiClient } from '../../data/network/LanraragiApiClient';
 import { ServerConfig } from '../../domain/model/LanraragiModels';
+import { localized } from '../../common/Localization';
 
 interface CacheDialogResult {
   index: number;
@@ -40,7 +41,7 @@ export struct SettingsPage {
   @State private serverMessage: string = '';
   @State private serverMessageIsError: boolean = false;
   @State private readerMessage: string = '';
-  @State private cacheSizeText: string = '正在统计…';
+  @State private cacheSizeText: string = localized('正在统计…', 'Calculating…');
   @State private cacheFileCount: number = 0;
   @State private isCacheBusy: boolean = false;
   @State private cacheMessage: string = '';
@@ -60,7 +61,7 @@ export struct SettingsPage {
           this.librarySection()
           this.cacheSection()
           this.readerSection()
-          Text('服务器配置仅保存在本机；阅读时只同步进度，不会删除服务器中的任何档案。')
+          Text(localized('服务器配置仅保存在本机；阅读时只同步进度，不会删除服务器中的任何档案。'))
             .copyOption(CopyOptions.LocalDevice)
             .fontSize(12)
             .lineHeight(18)
@@ -76,7 +77,7 @@ export struct SettingsPage {
       .height('100%')
       .scrollBar(BarState.Off)
     }
-    .title('设置')
+    .title(localized('设置'))
     .backgroundColor($r('app.color.page_background'))
   }
 
@@ -96,13 +97,13 @@ export struct SettingsPage {
       .borderRadius(15)
 
       Column({ space: 4 }) {
-        Text('应用设置')
+        Text(localized('应用设置'))
           .copyOption(CopyOptions.LocalDevice)
           .fontSize(21)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.text_primary'))
           .width('100%')
-        Text('连接配置与默认阅读体验')
+        Text(localized('连接配置与默认阅读体验'))
           .copyOption(CopyOptions.LocalDevice)
           .fontSize(13)
           .fontColor($r('app.color.text_tertiary'))
@@ -120,17 +121,17 @@ export struct SettingsPage {
   @Builder
   private serverSection() {
     Column({ space: 14 }) {
-      this.sectionTitle('服务器连接', '修改后需要验证才能保存')
+      this.sectionTitle(localized('服务器连接'), localized('修改后需要验证才能保存'))
 
       Column({ space: 7 }) {
-        Text('服务器地址')
+        Text(localized('服务器地址'))
           .copyOption(CopyOptions.LocalDevice)
           .fontSize(13)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.text_secondary'))
           .width('100%')
         TextInput({
-          placeholder: '例如：http://192.168.1.10:3000',
+          placeholder: localized('例如：http://192.168.1.10:3000'),
           text: this.serverUrl
         })
           .type(InputType.Normal)
@@ -154,7 +155,7 @@ export struct SettingsPage {
           .fontColor($r('app.color.text_secondary'))
           .width('100%')
         TextInput({
-          placeholder: '输入 LANraragi API Key',
+          placeholder: localized('输入 LANraragi API Key'),
           text: this.apiKey
         })
           .type(InputType.Password)
@@ -186,7 +187,7 @@ export struct SettingsPage {
       }
 
       Row({ space: 10 }) {
-        Button(this.isServerBusy ? '正在验证…' : '验证并保存')
+        Button(this.isServerBusy ? localized('正在验证…') : localized('验证并保存'))
           .height(46)
           .layoutWeight(1)
           .fontSize(15)
@@ -197,7 +198,7 @@ export struct SettingsPage {
             this.verifyAndSaveServer();
           })
 
-        Button('清除本机配置')
+        Button(localized('清除本机配置'))
           .height(46)
           .fontSize(14)
           .fontColor($r('app.color.error'))
@@ -219,17 +220,17 @@ export struct SettingsPage {
   @Builder
   private librarySection() {
     Column({ space: 10 }) {
-      this.sectionTitle('书库设置', '筛选与布局会自动保存')
+      this.sectionTitle(localized('书库设置'), localized('筛选与布局会自动保存'))
 
       Row({ space: 12 }) {
         Column({ space: 3 }) {
-          Text('隐藏已读完档案')
+          Text(localized('隐藏已读完档案'))
             .copyOption(CopyOptions.LocalDevice)
             .fontSize(15)
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_primary'))
             .width('100%')
-          Text('书库与分类中不显示进度已完成的档案')
+          Text(localized('书库与分类中不显示进度已完成的档案'))
             .copyOption(CopyOptions.LocalDevice)
             .fontSize(12)
             .lineHeight(17)
@@ -252,18 +253,18 @@ export struct SettingsPage {
       Divider().color($r('app.color.divider'))
 
       Column({ space: 8 }) {
-        Text('书库布局')
+        Text(localized('书库布局'))
           .copyOption(CopyOptions.LocalDevice)
           .fontSize(15)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.text_primary'))
           .width('100%')
         Select([
-          { value: '列表布局' },
-          { value: '封面网格布局' }
+          { value: localized('列表布局') },
+          { value: localized('封面网格布局') }
         ])
           .selected(this.gridLayout ? 1 : 0)
-          .value(this.gridLayout ? '封面网格布局' : '列表布局')
+          .value(this.gridLayout ? localized('封面网格布局') : localized('列表布局'))
           .height(46)
           .fontColor($r('app.color.text_primary'))
           .selectedOptionFontColor(Color.White)
@@ -281,25 +282,25 @@ export struct SettingsPage {
       .padding({ top: 6, bottom: 6 })
 
       Column({ space: 8 }) {
-        Text('网格每行文档数')
+        Text(localized('网格每行文档数'))
           .copyOption(CopyOptions.LocalDevice)
           .fontSize(15)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.text_primary'))
           .width('100%')
-        Text('自动模式会根据手机或平板的可用宽度排列文档，也可以手动指定列数')
+        Text(localized('自动模式会根据手机或平板的可用宽度排列文档，也可以手动指定列数'))
           .copyOption(CopyOptions.LocalDevice)
           .fontSize(12)
           .lineHeight(17)
           .fontColor($r('app.color.text_tertiary'))
           .width('100%')
         Select([
-          { value: '自动适配' },
-          { value: '每行 2 个' },
-          { value: '每行 3 个' },
-          { value: '每行 4 个' },
-          { value: '每行 5 个' },
-          { value: '每行 6 个' }
+          { value: localized('自动适配') },
+          { value: localized('每行 2 个', '2 per row') },
+          { value: localized('每行 3 个', '3 per row') },
+          { value: localized('每行 4 个', '4 per row') },
+          { value: localized('每行 5 个', '5 per row') },
+          { value: localized('每行 6 个', '6 per row') }
         ])
           .selected(this.gridColumnsOptionIndex())
           .value(this.gridColumnsLabel())
@@ -320,7 +321,7 @@ export struct SettingsPage {
       .width('100%')
       .padding({ top: 6, bottom: 6 })
 
-      Text('书库中的排序方式与升降序也会自动记住。')
+      Text(localized('书库中的排序方式与升降序也会自动记住。'))
         .copyOption(CopyOptions.LocalDevice)
         .fontSize(12)
         .fontColor($r('app.color.text_tertiary'))
@@ -337,19 +338,19 @@ export struct SettingsPage {
   @Builder
   private readerSection() {
     Column({ space: 6 }) {
-      this.sectionTitle('阅读设置', '更改会自动保存')
+      this.sectionTitle(localized('阅读设置'), localized('更改会自动保存'))
 
       Column({ space: 8 }) {
-        Text('默认阅读模式')
+        Text(localized('默认阅读模式'))
           .copyOption(CopyOptions.LocalDevice)
           .fontSize(15)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.text_primary'))
           .width('100%')
         Select([
-          { value: '单页阅读' },
-          { value: '双页阅读' },
-          { value: '瀑布连续阅读' }
+          { value: localized('单页阅读') },
+          { value: localized('双页阅读') },
+          { value: localized('瀑布连续阅读') }
         ])
           .selected(this.readerModeIndex)
           .value(this.readerModeLabel())
@@ -372,21 +373,21 @@ export struct SettingsPage {
       Divider().color($r('app.color.divider'))
 
       Column({ space: 8 }) {
-        Text('横向阅读方向')
+        Text(localized('横向阅读方向'))
           .copyOption(CopyOptions.LocalDevice)
           .fontSize(15)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.text_primary'))
           .width('100%')
-        Text('用于单页和双页阅读；右→左时，双页中的先读页会放在右侧')
+        Text(localized('用于单页和双页阅读；右→左时，双页中的先读页会放在右侧'))
           .copyOption(CopyOptions.LocalDevice)
           .fontSize(12)
           .lineHeight(17)
           .fontColor($r('app.color.text_tertiary'))
           .width('100%')
         Select([
-          { value: '左→右' },
-          { value: '右→左' }
+          { value: localized('左→右') },
+          { value: localized('右→左') }
         ])
           .selected(this.directionIndex)
           .value(this.directionLabel())
@@ -409,21 +410,21 @@ export struct SettingsPage {
       Divider().color($r('app.color.divider'))
 
       Column({ space: 8 }) {
-        Text('双页默认配对')
+        Text(localized('双页默认配对'))
           .copyOption(CopyOptions.LocalDevice)
           .fontSize(15)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.text_primary'))
           .width('100%')
-        Text('也可以在双页阅读界面点击顶部的配对按钮随时切换')
+        Text(localized('也可以在双页阅读界面点击顶部的配对按钮随时切换'))
           .copyOption(CopyOptions.LocalDevice)
           .fontSize(12)
           .lineHeight(17)
           .fontColor($r('app.color.text_tertiary'))
           .width('100%')
         Select([
-          { value: '第 1+2 页、3+4 页…' },
-          { value: '第 1 页单独、2+3 页…' }
+          { value: localized('第 1+2 页、3+4 页…', 'Pages 1+2, 3+4…') },
+          { value: localized('第 1 页单独、2+3 页…', 'Page 1 alone, then 2+3…') }
         ])
           .selected(this.doublePageOffset)
           .value(this.doublePageOffsetLabel())
@@ -446,25 +447,25 @@ export struct SettingsPage {
       Divider().color($r('app.color.divider'))
 
       Column({ space: 8 }) {
-        Text('预加载页数')
+        Text(localized('预加载页数'))
           .copyOption(CopyOptions.LocalDevice)
           .fontSize(15)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.text_primary'))
           .width('100%')
-        Text('提前加载当前页前后的页面；数值越大翻页越顺畅，但会占用更多内存和临时缓存')
+        Text(localized('提前加载当前页前后的页面；数值越大翻页越顺畅，但会占用更多内存和临时缓存'))
           .copyOption(CopyOptions.LocalDevice)
           .fontSize(12)
           .lineHeight(17)
           .fontColor($r('app.color.text_tertiary'))
           .width('100%')
         Select([
-          { value: '不预加载' },
-          { value: '1 页' },
-          { value: '2 页' },
-          { value: '3 页（推荐）' },
-          { value: '5 页' },
-          { value: '8 页' }
+          { value: localized('不预加载') },
+          { value: localized('1 页', '1 page') },
+          { value: localized('2 页', '2 pages') },
+          { value: localized('3 页（推荐）') },
+          { value: localized('5 页', '5 pages') },
+          { value: localized('8 页', '8 pages') }
         ])
           .selected(this.preloadOptionIndex())
           .value(this.preloadLabel())
@@ -488,23 +489,23 @@ export struct SettingsPage {
       Divider().color($r('app.color.divider'))
 
       Column({ space: 8 }) {
-        Text('\u56fe\u7247\u63d2\u503c\u65b9\u5f0f')
+        Text(localized('图片插值方式', 'Image interpolation'))
           .copyOption(CopyOptions.LocalDevice)
           .fontSize(15)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.text_primary'))
           .width('100%')
-        Text('\u8bbe\u7f6e\u9605\u8bfb\u5668\u7f29\u653e\u56fe\u7247\u65f6\u7684\u63d2\u503c\u65b9\u5f0f\uff0c\u89e3\u7801\u5c3a\u5bf8\u4fdd\u6301\u56fa\u5b9a')
+        Text(localized('设置阅读器缩放图片时的插值方式，解码尺寸保持固定', 'Choose how scaled reader images are interpolated. Decode dimensions remain fixed.'))
           .copyOption(CopyOptions.LocalDevice)
           .fontSize(12)
           .lineHeight(17)
           .fontColor($r('app.color.text_tertiary'))
           .width('100%')
         Select([
-          { value: '\u5173\u95ed\uff08\u6700\u8fd1\u90bb\uff09' },
-          { value: '\u4f4e\uff08\u53cc\u7ebf\u6027\uff09' },
-          { value: '\u4e2d\uff08MipMap\uff09' },
-          { value: '\u9ad8\uff08\u4e09\u6b21\u63d2\u503c\uff09' }
+          { value: localized('关闭（最近邻）', 'Off (nearest neighbor)') },
+          { value: localized('低（双线性）', 'Low (bilinear)') },
+          { value: localized('中（MipMap）', 'Medium (MipMap)') },
+          { value: localized('高（三次插值）', 'High (cubic)') }
         ])
           .selected(this.interpolationIndex)
           .value(this.interpolationLabel())
@@ -528,13 +529,13 @@ export struct SettingsPage {
 
       Row({ space: 12 }) {
         Column({ space: 3 }) {
-          Text('点击区域翻页')
+          Text(localized('点击区域翻页'))
             .copyOption(CopyOptions.LocalDevice)
             .fontSize(15)
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_primary'))
             .width('100%')
-          Text('点击屏幕左右两侧翻页，中间显示或隐藏页码栏')
+          Text(localized('点击屏幕左右两侧翻页，中间显示或隐藏页码栏'))
             .copyOption(CopyOptions.LocalDevice)
             .fontSize(12)
             .lineHeight(17)
@@ -558,13 +559,13 @@ export struct SettingsPage {
 
       Row({ space: 12 }) {
         Column({ space: 3 }) {
-          Text('进入时显示页码栏')
+          Text(localized('进入时显示页码栏'))
             .copyOption(CopyOptions.LocalDevice)
             .fontSize(15)
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_primary'))
             .width('100%')
-          Text('打开档案时先显示页码与拖拽进度条')
+          Text(localized('打开档案时先显示页码与拖拽进度条'))
             .copyOption(CopyOptions.LocalDevice)
             .fontSize(12)
             .lineHeight(17)
@@ -603,7 +604,7 @@ export struct SettingsPage {
   @Builder
   private cacheSection() {
     Column({ space: 14 }) {
-      this.sectionTitle('图片缓存', '封面长期保存，阅读页退出档案后自动删除')
+      this.sectionTitle(localized('图片缓存'), localized('封面长期保存，阅读页退出档案后自动删除'))
 
       Row({ space: 12 }) {
         Column({ space: 4 }) {
@@ -613,7 +614,7 @@ export struct SettingsPage {
             .fontWeight(FontWeight.Bold)
             .fontColor($r('app.color.text_primary'))
             .width('100%')
-          Text(`${this.cacheFileCount} 个图片文件`)
+          Text(`${this.cacheFileCount} ${localized('个图片文件', 'image files')}`)
             .copyOption(CopyOptions.LocalDevice)
             .fontSize(12)
             .fontColor($r('app.color.text_tertiary'))
@@ -621,7 +622,7 @@ export struct SettingsPage {
         }
         .layoutWeight(1)
 
-        Button(this.isCacheBusy ? '正在清理…' : '清空缓存')
+        Button(this.isCacheBusy ? localized('正在清理…') : localized('清空缓存'))
           .height(44)
           .fontSize(14)
           .fontColor($r('app.color.error'))
@@ -633,7 +634,7 @@ export struct SettingsPage {
       }
       .width('100%')
 
-      Text('阅读页只在当前阅读期间缓存；退出档案后自动释放。清理操作不会影响服务器档案、进度和连接配置。')
+      Text(localized('阅读页只在当前阅读期间缓存；退出档案后自动释放。清理操作不会影响服务器档案、进度和连接配置。'))
         .copyOption(CopyOptions.LocalDevice)
         .fontSize(12)
         .lineHeight(18)
@@ -689,7 +690,7 @@ export struct SettingsPage {
       const settings: ReaderSettings = await this.readerRepository().load();
       this.applyReaderSettings(settings);
     } catch (error) {
-      this.readerMessage = '读取阅读设置失败，将使用默认值';
+      this.readerMessage = localized('读取阅读设置失败，将使用默认值');
     }
 
     try {
@@ -709,10 +710,10 @@ export struct SettingsPage {
       this.cacheFileCount = stats.fileCount;
       this.cacheMessageIsError = false;
     } catch (error) {
-      this.cacheSizeText = '统计失败';
+      this.cacheSizeText = localized('统计失败');
       this.cacheFileCount = 0;
       this.cacheMessageIsError = true;
-      this.cacheMessage = '暂时无法读取本地缓存信息';
+      this.cacheMessage = localized('暂时无法读取本地缓存信息');
     }
   }
 
@@ -720,11 +721,11 @@ export struct SettingsPage {
     try {
       const result: CacheDialogResult = await
         (this.getUIContext().getPromptAction().showDialog({
-          title: '清空图片缓存？',
-          message: '只会删除手机本地的封面和阅读页副本，下次查看时会重新从服务器加载。',
+          title: localized('清空图片缓存？'),
+          message: localized('只会删除手机本地的封面和阅读页副本，下次查看时会重新从服务器加载。'),
           buttons: [
-            { text: '取消', color: '#5D6B7A' },
-            { text: '清空', color: '#C43E3E' }
+            { text: localized('取消'), color: '#5D6B7A' },
+            { text: localized('清空'), color: '#C43E3E' }
           ]
         }) as Promise<CacheDialogResult>);
       if (result.index === 1) {
@@ -746,10 +747,10 @@ export struct SettingsPage {
       this.cacheSizeText = '0 B';
       this.cacheFileCount = 0;
       this.cacheMessageIsError = false;
-      this.cacheMessage = '本机图片缓存已清空';
+      this.cacheMessage = localized('本机图片缓存已清空');
     } catch (error) {
       this.cacheMessageIsError = true;
-      this.cacheMessage = '清空缓存失败，请稍后重试';
+      this.cacheMessage = localized('清空缓存失败，请稍后重试');
       this.refreshCacheStats();
     } finally {
       this.isCacheBusy = false;
@@ -775,7 +776,7 @@ export struct SettingsPage {
     }
     if (this.serverUrl.trim().length === 0) {
       this.serverMessageIsError = true;
-      this.serverMessage = '请输入 LANraragi 服务器地址';
+      this.serverMessage = localized('请输入 LANraragi 服务器地址');
       return;
     }
 
@@ -791,7 +792,7 @@ export struct SettingsPage {
       await this.serverRepository().save(config);
       this.serverUrl = normalizedUrl;
       this.serverMessageIsError = false;
-      this.serverMessage = '连接验证成功，配置已安全保存';
+      this.serverMessage = localized('连接验证成功，配置已安全保存');
       this.onServerSaved(config);
       this.pathStack.pop();
     } catch (error) {
@@ -813,7 +814,7 @@ export struct SettingsPage {
       this.serverUrl = '';
       this.apiKey = '';
       this.serverMessageIsError = false;
-      this.serverMessage = '本机连接配置已清除，服务器档案未作任何更改';
+      this.serverMessage = localized('本机连接配置已清除，服务器档案未作任何更改');
       this.onServerCleared();
       this.pathStack.pop();
     } catch (error) {
@@ -827,9 +828,9 @@ export struct SettingsPage {
   private async saveReaderSettings(): Promise<void> {
     try {
       await this.readerRepository().save(this.currentReaderSettings());
-      this.readerMessage = '阅读设置已保存';
+      this.readerMessage = localized('阅读设置已保存');
     } catch (error) {
-      this.readerMessage = '阅读设置保存失败';
+      this.readerMessage = localized('阅读设置保存失败');
     }
   }
 
@@ -846,7 +847,7 @@ export struct SettingsPage {
       await this.libraryRepository().save(updated);
       this.onLibrarySettingsSaved(updated);
     } catch (error) {
-      this.readerMessage = '书库设置保存失败';
+      this.readerMessage = localized('书库设置保存失败');
     }
   }
 
@@ -858,12 +859,12 @@ export struct SettingsPage {
 
   private gridColumnsLabel(): string {
     const labels: Array<string> = [
-      '自动适配',
-      '每行 2 个',
-      '每行 3 个',
-      '每行 4 个',
-      '每行 5 个',
-      '每行 6 个'
+      localized('自动适配'),
+      localized('每行 2 个', '2 per row'),
+      localized('每行 3 个', '3 per row'),
+      localized('每行 4 个', '4 per row'),
+      localized('每行 5 个', '5 per row'),
+      localized('每行 6 个', '6 per row')
     ];
     return labels[this.gridColumnsOptionIndex()];
   }
@@ -894,41 +895,42 @@ export struct SettingsPage {
 
   private preloadLabel(): string {
     const labels: Array<string> = [
-      '不预加载',
-      '1 页',
-      '2 页',
-      '3 页（推荐）',
-      '5 页',
-      '8 页'
+      localized('不预加载'),
+      localized('1 页', '1 page'),
+      localized('2 页', '2 pages'),
+      localized('3 页（推荐）'),
+      localized('5 页', '5 pages'),
+      localized('8 页', '8 pages')
     ];
     return labels[this.preloadOptionIndex()];
   }
 
   private interpolationLabel(): string {
     const labels: Array<string> = [
-      '\u5173\u95ed\uff08\u6700\u8fd1\u90bb\uff09',
-      '\u4f4e\uff08\u53cc\u7ebf\u6027\uff09',
-      '\u4e2d\uff08MipMap\uff09',
-      '\u9ad8\uff08\u4e09\u6b21\u63d2\u503c\uff09'
+      localized('关闭（最近邻）', 'Off (nearest neighbor)'),
+      localized('低（双线性）', 'Low (bilinear)'),
+      localized('中（MipMap）', 'Medium (MipMap)'),
+      localized('高（三次插值）', 'High (cubic)')
     ];
     return labels[Math.min(Math.max(this.interpolationIndex, 0), 3)];
   }
 
   private directionLabel(): string {
     if (this.directionIndex === 1) {
-      return '右→左';
+      return localized('右→左');
     }
-    return '左→右';
+    return localized('左→右');
   }
 
   private readerModeLabel(): string {
-    const labels: Array<string> = ['单页阅读', '双页阅读', '瀑布连续阅读'];
+    const labels: Array<string> = [localized('单页阅读'), localized('双页阅读'), localized('瀑布连续阅读')];
     return labels[this.readerModeIndex] ?? labels[0];
   }
 
   private doublePageOffsetLabel(): string {
     return this.doublePageOffset === 1 ?
-      '第 1 页单独、2+3 页…' : '第 1+2 页、3+4 页…';
+      localized('第 1 页单独、2+3 页…', 'Page 1 alone, then 2+3…') :
+      localized('第 1+2 页、3+4 页…', 'Pages 1+2, 3+4…');
   }
 
   private serverRepository(): ServerConfigRepository {
@@ -959,6 +961,6 @@ export struct SettingsPage {
     if (error instanceof Error && error.message.length > 0) {
       return error.message;
     }
-    return '操作失败，请检查网络和输入内容';
+    return localized('操作失败，请检查网络和输入内容');
   }
 }

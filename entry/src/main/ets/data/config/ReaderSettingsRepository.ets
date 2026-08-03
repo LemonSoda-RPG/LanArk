@@ -1,5 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
+import { localized } from '../../common/Localization';
 
 const PREFERENCES_NAME: string = 'lanark_reader_settings';
 const DIRECTION_KEY: string = 'reader_direction';
@@ -70,7 +71,7 @@ export class ReaderSettingsRepository {
         interpolationIndex
       );
     } catch (error) {
-      throw new Error('读取阅读设置失败');
+      throw new Error(localized('读取阅读设置失败', 'Could not read reading settings'));
     }
   }
 
@@ -85,7 +86,7 @@ export class ReaderSettingsRepository {
       await store.put(INTERPOLATION_KEY, settings.interpolationIndex);
       await store.flush();
     } catch (error) {
-      throw new Error('保存阅读设置失败');
+      throw new Error(localized('保存阅读设置失败', 'Could not save reading settings'));
     }
   }
 }

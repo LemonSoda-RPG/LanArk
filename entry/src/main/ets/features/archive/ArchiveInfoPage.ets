@@ -6,6 +6,7 @@ import {
   ArchiveItem,
   ServerConfig
 } from '../../domain/model/LanraragiModels';
+import { isEnglishSystemLanguage, localized } from '../../common/Localization';
 
 function emptyArchive(): ArchiveItem {
   const payload: ArchiveIndexPayload = {
@@ -49,12 +50,12 @@ export struct ArchiveInfoPage {
           .borderRadius(20)
           .backgroundColor($r('app.color.surface'))
           .border({ width: 1, color: $r('app.color.divider') })
-          .accessibilityText('返回阅读界面')
+          .accessibilityText(localized('返回阅读界面'))
           .onClick(() => {
             this.pathStack.pop();
           })
 
-          Text('档案信息')
+          Text(localized('档案信息'))
             .copyOption(CopyOptions.LocalDevice)
             .fontSize(20)
             .fontWeight(FontWeight.Bold)
@@ -98,7 +99,7 @@ export struct ArchiveInfoPage {
         .fontWeight(FontWeight.Bold)
         .fontColor($r('app.color.text_primary'))
         .width('100%')
-      Text(`${this.archive.pageCount} 页 · ${this.archive.progressText}`)
+      Text(`${this.archive.pageCount} ${localized('页', 'pages')} · ${this.archive.progressText}`)
         .copyOption(CopyOptions.LocalDevice)
         .fontSize(14)
         .fontColor($r('app.color.text_secondary'))
@@ -115,13 +116,13 @@ export struct ArchiveInfoPage {
   private tagSection() {
     Column({ space: 12 }) {
       Row() {
-        Text('全部标签')
+        Text(localized('全部标签'))
           .copyOption(CopyOptions.LocalDevice)
           .fontSize(17)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.text_primary'))
           .layoutWeight(1)
-        Text(`${this.archive.tagItems().length} 项`)
+        Text(`${this.archive.tagItems().length} ${localized('项', 'tags')}`)
           .copyOption(CopyOptions.LocalDevice)
           .fontSize(13)
           .fontColor($r('app.color.text_tertiary'))
@@ -129,7 +130,7 @@ export struct ArchiveInfoPage {
       .width('100%')
 
       if (this.archive.tagItems().length === 0) {
-        Text('当前档案没有标签')
+        Text(localized('当前档案没有标签'))
           .copyOption(CopyOptions.LocalDevice)
           .fontSize(14)
           .fontColor($r('app.color.text_tertiary'))
@@ -152,7 +153,7 @@ export struct ArchiveInfoPage {
             .margin({ right: 8, bottom: 8 })
             .backgroundColor($r('app.color.accent_soft'))
             .borderRadius(11)
-            .accessibilityText(`搜索标签 ${tag}`)
+            .accessibilityText(`${localized('搜索标签', 'Search tag')} ${tag}`)
             .onClick(() => {
               this.onTagSelected(tag);
             })
@@ -171,13 +172,13 @@ export struct ArchiveInfoPage {
   @Builder
   private dangerSection() {
     Column({ space: 12 }) {
-      Text('危险操作')
+      Text(localized('危险操作'))
         .copyOption(CopyOptions.LocalDevice)
         .fontSize(17)
         .fontWeight(FontWeight.Bold)
         .fontColor($r('app.color.error'))
         .width('100%')
-      Text('删除会同时移除服务器中的档案文件和元数据，此操作无法撤销。')
+      Text(localized('删除会同时移除服务器中的档案文件和元数据，此操作无法撤销。'))
         .copyOption(CopyOptions.LocalDevice)
         .fontSize(13)
         .lineHeight(19)
@@ -195,7 +196,7 @@ export struct ArchiveInfoPage {
           .borderRadius(10)
       }
 
-      Button(this.isDeleting ? '正在删除…' : '删除当前档案')
+      Button(this.isDeleting ? localized('正在删除…') : localized('删除当前档案'))
         .width('100%')
         .height(48)
         .enabled(!this.isDeleting)
@@ -222,11 +223,13 @@ export struct ArchiveInfoPage {
     try {
       const result: DeleteDialogResult = await
         (this.getUIContext().getPromptAction().showDialog({
-        title: '确认删除当前档案？',
-        message: `“${this.archive.title}”将从服务器永久删除，文件和元数据均无法恢复。`,
+        title: localized('确认删除当前档案？'),
+        message: isEnglishSystemLanguage() ?
+          `“${this.archive.title}” will be permanently deleted from the server. Files and metadata cannot be recovered.` :
+          `“${this.archive.title}”将从服务器永久删除，文件和元数据均无法恢复。`,
         buttons: [
-          { text: '取消', color: '#5D6B7A' },
-          { text: '删除', color: '#C43E3E' }
+          { text: localized('取消'), color: '#5D6B7A' },
+          { text: localized('删除'), color: '#C43E3E' }
         ]
       }) as Promise<DeleteDialogResult>);
       if (result.index !== 1) {
@@ -264,6 +267,6 @@ export struct ArchiveInfoPage {
     if (error instanceof Error && error.message.length > 0) {
       return error.message;
     }
-    return '删除档案失败';
+    return localized('删除档案失败');
   }
 }

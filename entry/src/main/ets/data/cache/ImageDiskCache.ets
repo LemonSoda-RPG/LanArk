@@ -1,6 +1,7 @@
 import { common } from '@kit.AbilityKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { image } from '@kit.ImageKit';
+import { localized } from '../../common/Localization';
 
 const COVER_CACHE_FOLDER_NAME: string = 'lanark-cover-cache-v2';
 const LEGACY_COVER_CACHE_FOLDER_NAME: string = 'lanark-image-cache';
@@ -102,7 +103,7 @@ export class ImageDiskCache {
     const archivePath: string =
       `${this.readerServerPath}/${this.safePathPart(archiveId)}`;
     if (!archivePath.startsWith(`${this.readerRootPath}/`)) {
-      throw new Error('阅读缓存目录校验失败');
+      throw new Error(localized('阅读缓存目录校验失败', 'Reading cache directory validation failed'));
     }
     if (this.exists(archivePath)) {
       this.removeDirectoryContents(archivePath);
@@ -113,7 +114,7 @@ export class ImageDiskCache {
   clearArchiveCover(archiveId: string): void {
     const path: string = this.coverPath(archiveId);
     if (!path.startsWith(`${this.coverRootPath}/`)) {
-      throw new Error('封面缓存路径校验失败');
+      throw new Error(localized('封面缓存路径校验失败', 'Cover cache path validation failed'));
     }
     if (this.exists(path)) {
       this.deleteFileIfExists(path);
@@ -170,7 +171,7 @@ export class ImageDiskCache {
       try {
         const bytesWritten: number = fs.writeSync(file.fd, data);
         if (bytesWritten !== data.byteLength) {
-          throw new Error('图片缓存写入不完整');
+          throw new Error(localized('图片缓存写入不完整', 'Image cache write was incomplete'));
         }
       } finally {
         fs.closeSync(file);
@@ -233,7 +234,7 @@ export class ImageDiskCache {
 
   private removeValidatedRoot(path: string, expectedPath: string, parentPath: string): void {
     if (path !== expectedPath || !path.startsWith(`${parentPath}/`)) {
-      throw new Error('缓存目录校验失败');
+      throw new Error(localized('缓存目录校验失败', 'Cache directory validation failed'));
     }
     if (this.exists(path)) {
       this.removeDirectoryContents(path);

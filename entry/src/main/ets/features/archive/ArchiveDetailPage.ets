@@ -9,6 +9,7 @@ import {
   ReaderRouteParams,
   ServerConfig
 } from '../../domain/model/LanraragiModels';
+import { localized } from '../../common/Localization';
 
 function emptyArchive(): ArchiveItem {
   const payload: ArchiveIndexPayload = {
@@ -98,7 +99,7 @@ export struct ArchiveDetailPage {
             }
             .width('100%')
 
-            Text(`${this.archive.pageCount} 页 · ${this.archive.progressText}`)
+            Text(`${this.archive.pageCount} ${localized('页', 'pages')} · ${this.archive.progressText}`)
               .copyOption(CopyOptions.LocalDevice)
               .fontSize(15)
               .fontColor($r('app.color.text_secondary'))
@@ -106,7 +107,7 @@ export struct ArchiveDetailPage {
 
             if (this.archive.tags.length > 0) {
               Column({ space: 10 }) {
-                Text('标签')
+                Text(localized('标签'))
                   .copyOption(CopyOptions.LocalDevice)
                   .fontSize(14)
                   .fontWeight(FontWeight.Medium)
@@ -141,7 +142,7 @@ export struct ArchiveDetailPage {
           }
           .width('100%')
 
-          Button(this.archive.progress > 0 ? '继续阅读' : '开始阅读')
+            Button(this.archive.progress > 0 ? localized('继续阅读') : localized('开始阅读'))
             .width('100%')
             .height(52)
             .fontSize(17)
@@ -152,7 +153,7 @@ export struct ArchiveDetailPage {
             })
 
           if (this.archive.progress > 0) {
-            Button('从第一页开始')
+            Button(localized('从第一页开始'))
               .width('100%')
               .height(50)
               .fontSize(16)
@@ -171,7 +172,7 @@ export struct ArchiveDetailPage {
       .height('100%')
       .backgroundColor($r('app.color.page_background'))
     }
-    .title('档案详情')
+    .title(localized('档案详情'))
   }
 
   private openReader(fromStart: boolean): void {
@@ -201,7 +202,7 @@ export struct ArchiveDetailPage {
         shouldCache = buffer !== undefined;
       }
       if (buffer === undefined) {
-        this.thumbnailError = '缩略图正在生成';
+        this.thumbnailError = localized('缩略图正在生成');
         return;
       }
       const source: image.ImageSource = image.createImageSource(buffer);
@@ -244,6 +245,6 @@ export struct ArchiveDetailPage {
     if (error instanceof Error && error.message.length > 0) {
       return error.message;
     }
-    return '缩略图加载失败';
+    return localized('缩略图加载失败');
   }
 }

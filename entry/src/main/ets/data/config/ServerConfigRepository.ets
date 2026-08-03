@@ -4,6 +4,7 @@ import { preferences } from '@kit.ArkData';
 import { asset } from '@kit.AssetStoreKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { ServerConfig } from '../../domain/model/LanraragiModels';
+import { localized } from '../../common/Localization';
 
 const PREFERENCES_NAME: string = 'lanark_settings';
 const SERVER_URL_KEY: string = 'lanraragi_server_url';
@@ -25,7 +26,7 @@ export class ServerConfigRepository {
       const apiKey: string = await this.readApiKey();
       return new ServerConfig(serverUrl, apiKey);
     } catch (error) {
-      throw new Error(`读取服务器配置失败：${this.errorMessage(error)}`);
+      throw new Error(`${localized('读取服务器配置失败：', 'Failed to read server settings: ')}${this.errorMessage(error)}`);
     }
   }
 
@@ -37,7 +38,7 @@ export class ServerConfigRepository {
       await store.put(SERVER_URL_KEY, config.serverUrl);
       await store.flush();
     } catch (error) {
-      throw new Error(`保存服务器配置失败：${this.errorMessage(error)}`);
+      throw new Error(`${localized('保存服务器配置失败：', 'Failed to save server settings: ')}${this.errorMessage(error)}`);
     }
   }
 
@@ -49,7 +50,7 @@ export class ServerConfigRepository {
       await store.delete(SERVER_URL_KEY);
       await store.flush();
     } catch (error) {
-      throw new Error(`清除服务器配置失败：${this.errorMessage(error)}`);
+      throw new Error(`${localized('清除服务器配置失败：', 'Failed to clear server settings: ')}${this.errorMessage(error)}`);
     }
   }
 
@@ -76,7 +77,7 @@ export class ServerConfigRepository {
       if (this.isAssetError(error, asset.ErrorCode.NOT_FOUND)) {
         return '';
       }
-      throw new Error(`读取 API Key 失败：${this.errorMessage(error)}`);
+      throw new Error(`${localized('读取 API Key 失败：', 'Failed to read API key: ')}${this.errorMessage(error)}`);
     }
   }
 
@@ -102,10 +103,10 @@ export class ServerConfigRepository {
           await asset.update(query, attributesToUpdate);
           return;
         } catch (updateError) {
-          throw new Error(`更新 API Key 失败：${this.errorMessage(updateError)}`);
+          throw new Error(`${localized('更新 API Key 失败：', 'Failed to update API key: ')}${this.errorMessage(updateError)}`);
         }
       }
-      throw new Error(`写入 API Key 失败：${this.errorMessage(error)}`);
+      throw new Error(`${localized('写入 API Key 失败：', 'Failed to write API key: ')}${this.errorMessage(error)}`);
     }
   }
 
@@ -118,7 +119,7 @@ export class ServerConfigRepository {
       if (this.isAssetError(error, asset.ErrorCode.NOT_FOUND)) {
         return;
       }
-      throw new Error(`删除 API Key 失败：${this.errorMessage(error)}`);
+      throw new Error(`${localized('删除 API Key 失败：', 'Failed to delete API key: ')}${this.errorMessage(error)}`);
     }
   }
 
@@ -130,6 +131,6 @@ export class ServerConfigRepository {
     if (error instanceof Error && error.message.length > 0) {
       return error.message;
     }
-    return '系统安全存储不可用';
+    return localized('系统安全存储不可用', 'System secure storage is unavailable');
   }
 }

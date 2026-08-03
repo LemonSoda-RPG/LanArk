@@ -1,3 +1,5 @@
+import { localized } from '../../common/Localization';
+
 export interface ServerInfoPayload {
   archives_per_page: number;
   debug_mode: boolean;
@@ -37,7 +39,7 @@ export class ServerInfo {
     const payload: ServerInfoPayload = JSON.parse(json) as ServerInfoPayload;
     if (payload.name === undefined || payload.version === undefined ||
       payload.archives_per_page === undefined) {
-      throw new Error('服务器信息格式不完整');
+      throw new Error(localized('服务器信息格式不完整', 'The server information is incomplete'));
     }
     return new ServerInfo(payload);
   }
@@ -91,10 +93,10 @@ export class ArchiveItem {
 
   get progressText(): string {
     if (this.pageCount <= 0 || this.progress <= 0) {
-      return '未读';
+      return localized('未读');
     }
     if (this.progress >= this.pageCount) {
-      return '已读完';
+      return localized('已读完');
     }
     return `${this.progress}/${this.pageCount}`;
   }

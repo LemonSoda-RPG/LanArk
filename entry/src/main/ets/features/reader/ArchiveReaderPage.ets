@@ -15,6 +15,7 @@ import {
   ReaderRouteParams,
   ServerConfig
 } from '../../domain/model/LanraragiModels';
+import { localized } from '../../common/Localization';
 
 // Keep the decoded page at a useful reading resolution instead of decoding an
 // arbitrarily large source image and asking the renderer to shrink it later.
@@ -250,19 +251,19 @@ struct ReaderImageView {
             .width(42)
             .height(42)
             .color(Color.White)
-          Text(`正在加载第 ${this.page.pageNumber} 页`)
+          Text(`${localized('正在加载第')} ${this.page.pageNumber} ${localized('页', 'page')}`)
             .copyOption(CopyOptions.LocalDevice)
             .fontSize(14)
             .fontColor('#D9FFFFFF')
         }
       } else {
         Column({ space: 12 }) {
-          Text(this.errorMessage.length > 0 ? this.errorMessage : '页面加载失败')
+          Text(this.errorMessage.length > 0 ? this.errorMessage : localized('页面加载失败'))
             .copyOption(CopyOptions.LocalDevice)
             .fontSize(15)
             .fontColor(Color.White)
             .textAlign(TextAlign.Center)
-          Button('重试')
+          Button(localized('重试'))
             .height(44)
             .onClick(() => {
               this.loadImage();
@@ -315,7 +316,7 @@ struct ReaderImageView {
         shouldCache = buffer !== undefined;
       }
       if (buffer === undefined) {
-        throw new Error('服务器暂未生成该页面');
+        throw new Error(localized('服务器暂未生成该页面'));
       }
       const source: image.ImageSource = image.createImageSource(buffer);
       try {
@@ -348,7 +349,7 @@ struct ReaderImageView {
     if (error instanceof Error && error.message.length > 0) {
       return error.message;
     }
-    return '页面加载失败';
+    return localized('页面加载失败');
   }
 }
 
@@ -413,7 +414,7 @@ export struct ArchiveReaderPage {
               .width(48)
               .height(48)
               .color(Color.White)
-            Text('正在准备档案…')
+            Text(localized('正在准备档案…'))
               .copyOption(CopyOptions.LocalDevice)
               .fontSize(16)
               .fontColor(Color.White)
@@ -425,7 +426,7 @@ export struct ArchiveReaderPage {
               .fontSize(16)
               .fontColor(Color.White)
               .textAlign(TextAlign.Center)
-            Button('重试')
+            Button(localized('重试'))
               .onClick(() => {
                 this.loadPages();
               })
@@ -565,7 +566,7 @@ export struct ArchiveReaderPage {
               .width(44)
               .height(44)
               .backgroundColor('#99000000')
-              .accessibilityText('返回档案库')
+              .accessibilityText(localized('返回档案库'))
               .onClick(() => {
                 this.exitReader();
               })
@@ -580,8 +581,8 @@ export struct ArchiveReaderPage {
                 .fontColor(Color.White)
                 .backgroundColor('#99000000')
                 .accessibilityText(this.doublePageOffset === 0 ?
-                  '当前从第一页开始双页配对，点击改为第二页开始' :
-                  '当前从第二页开始双页配对，点击改为第一页开始')
+                  localized('当前从第一页开始双页配对，点击改为第二页开始', 'Currently pairing from page 1; tap to start from page 2') :
+                  localized('当前从第二页开始双页配对，点击改为第一页开始', 'Currently pairing from page 2; tap to start from page 1'))
                 .onClick(() => {
                   this.toggleDoublePageOffset();
                 })
@@ -593,7 +594,7 @@ export struct ArchiveReaderPage {
                 .fontWeight(FontWeight.Bold)
                 .fontColor(Color.White)
                 .backgroundColor('#99000000')
-                .accessibilityText('重置瀑布页面宽度')
+                .accessibilityText(localized('重置瀑布页面宽度'))
                 .onClick(() => {
                   this.waterfallScale = 1;
                 })
@@ -609,7 +610,7 @@ export struct ArchiveReaderPage {
               .width(44)
               .height(44)
               .backgroundColor('#99000000')
-              .accessibilityText('查看档案标签和操作')
+              .accessibilityText(localized('查看档案标签和操作'))
               .onClick(() => {
                 this.openArchiveInfo();
               })
@@ -624,7 +625,7 @@ export struct ArchiveReaderPage {
               .width(44)
               .height(44)
               .backgroundColor('#99000000')
-              .accessibilityText('当前文档阅读设置')
+              .accessibilityText(localized('当前文档阅读设置'))
               .onClick(() => {
                 this.readerSettingsVisible = true;
               })
@@ -686,7 +687,7 @@ export struct ArchiveReaderPage {
 
             Column({ space: 18 }) {
               Row() {
-                Text('当前文档阅读设置')
+                Text(localized('当前文档阅读设置'))
                   .copyOption(CopyOptions.LocalDevice)
                   .fontSize(19)
                   .fontWeight(FontWeight.Bold)
@@ -696,14 +697,14 @@ export struct ArchiveReaderPage {
               }
               .width('100%')
 
-              Text('阅读方式')
+              Text(localized('阅读方式'))
                 .copyOption(CopyOptions.LocalDevice)
                 .fontSize(14)
                 .fontColor('#CCFFFFFF')
                 .width('100%')
 
               Row({ space: 8 }) {
-                ForEach(['单页阅读', '双页阅读', '瀑布连续阅读'],
+                ForEach([localized('单页阅读'), localized('双页阅读'), localized('瀑布连续阅读')],
                   (label: string, index: number) => {
                     Button() {
                       Text(label)
@@ -729,14 +730,14 @@ export struct ArchiveReaderPage {
               Divider()
                 .color('#33FFFFFF')
 
-              Text('阅读方向')
+              Text(localized('阅读方向'))
                 .copyOption(CopyOptions.LocalDevice)
                 .fontSize(14)
                 .fontColor('#CCFFFFFF')
                 .width('100%')
 
               Row({ space: 8 }) {
-                ForEach(['从左向右', '从右向左'],
+                ForEach([localized('从左向右'), localized('从右向左')],
                   (label: string, index: number) => {
                     Button() {
                       Text(label)
@@ -758,7 +759,7 @@ export struct ArchiveReaderPage {
               }
               .width('100%')
 
-              Text('仅对当前文档生效，不会修改设置页中的全局默认值')
+              Text(localized('仅对当前文档生效，不会修改设置页中的全局默认值'))
                 .copyOption(CopyOptions.LocalDevice)
                 .fontSize(12)
                 .fontColor('#99FFFFFF')
@@ -858,7 +859,7 @@ export struct ArchiveReaderPage {
       const loadedPages: Array<ReaderPage> =
         await client.fetchArchivePages(this.params.archive.id);
       if (loadedPages.length === 0) {
-        throw new Error('服务器返回的页面列表为空');
+         throw new Error(localized('服务器返回的页面列表为空'));
       }
       this.pages = loadedPages;
       this.pageDataSource.replace(loadedPages);
@@ -1197,6 +1198,6 @@ export struct ArchiveReaderPage {
     if (error instanceof Error && error.message.length > 0) {
       return error.message;
     }
-    return '档案加载失败';
+    return localized('档案加载失败');
   }
 }

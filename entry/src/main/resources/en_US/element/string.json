@@ -1,0 +1,104 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "Native LANraragi reader"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "LanArk main page"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "LanArk"
+    },
+    {
+      "name": "setup_subtitle",
+      "value": "Connect to your LANraragi server"
+    },
+    {
+      "name": "server_url_label",
+      "value": "Server URL"
+    },
+    {
+      "name": "server_url_placeholder",
+      "value": "Example: http://192.168.1.10:3000"
+    },
+    {
+      "name": "api_key_label",
+      "value": "API key"
+    },
+    {
+      "name": "api_key_placeholder",
+      "value": "Leave empty if no key is configured"
+    },
+    {
+      "name": "api_key_storage_hint",
+      "value": "The API key is stored in the system secure storage."
+    },
+    {
+      "name": "connect",
+      "value": "Connect and save"
+    },
+    {
+      "name": "connecting",
+      "value": "Connecting…"
+    },
+    {
+      "name": "connected",
+      "value": "Connected"
+    },
+    {
+      "name": "server_address",
+      "value": "Server"
+    },
+    {
+      "name": "server_version",
+      "value": "Version"
+    },
+    {
+      "name": "archives_per_page",
+      "value": "Archives per page"
+    },
+    {
+      "name": "library_title",
+      "value": "Library"
+    },
+    {
+      "name": "archive_unit",
+      "value": "archives"
+    },
+    {
+      "name": "refresh",
+      "value": "Refresh"
+    },
+    {
+      "name": "search_placeholder",
+      "value": "Search titles or tags"
+    },
+    {
+      "name": "loading_library",
+      "value": "Loading library index…"
+    },
+    {
+      "name": "empty_library",
+      "value": "No archives found"
+    },
+    {
+      "name": "no_tags",
+      "value": "No tags"
+    },
+    {
+      "name": "page_unit",
+      "value": "pages"
+    },
+    {
+      "name": "change_server",
+      "value": "Change server settings"
+    },
+    {
+      "name": "clear_server",
+      "value": "Clear server settings"
+    }
+  ]
+}

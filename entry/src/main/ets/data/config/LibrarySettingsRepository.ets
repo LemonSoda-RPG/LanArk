@@ -1,5 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
+import { localized } from '../../common/Localization';
 
 const PREFERENCES_NAME: string = 'lanark_library_settings';
 const SORT_MODE_KEY: string = 'library_sort_mode';
@@ -60,7 +61,7 @@ export class LibrarySettingsRepository {
         gridColumns
       );
     } catch (error) {
-      throw new Error('读取书库设置失败');
+      throw new Error(localized('读取书库设置失败', 'Could not read library settings'));
     }
   }
 
@@ -75,7 +76,7 @@ export class LibrarySettingsRepository {
       await store.put(GRID_COLUMNS_KEY, settings.gridColumns);
       await store.flush();
     } catch (error) {
-      throw new Error('保存书库设置失败');
+      throw new Error(localized('保存书库设置失败', 'Could not save library settings'));
     }
   }
 }

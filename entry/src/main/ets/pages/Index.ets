@@ -22,6 +22,7 @@ import { ArchiveDetailPage } from '../features/archive/ArchiveDetailPage';
 import { ArchiveInfoPage } from '../features/archive/ArchiveInfoPage';
 import { ArchiveReaderPage } from '../features/reader/ArchiveReaderPage';
 import { SettingsPage } from '../features/settings/SettingsPage';
+import { localized } from '../common/Localization';
 
 class ArchiveDataSource implements IDataSource {
   private items: Array<ArchiveItem> = [];
@@ -77,7 +78,7 @@ struct ArchiveProgressText {
   fontSize: number = 11;
 
   build() {
-    Text(`${this.archive.pageCount} 页 · ${this.archive.progressText}`)
+    Text(`${this.archive.pageCount} ${localized('页', 'pages')} · ${this.archive.progressText}`)
       .copyOption(CopyOptions.LocalDevice)
       .fontSize(this.fontSize)
       .fontColor($r('app.color.text_secondary'))
@@ -422,7 +423,7 @@ struct Index {
           })
 
         if (this.serverUrl.length > 0) {
-          Button('清除保存的服务器配置')
+          Button(localized('清除保存的服务器配置'))
             .width('100%')
             .height(48)
             .fontSize(15)
@@ -458,7 +459,7 @@ struct Index {
             .borderRadius(20)
             .backgroundColor($r('app.color.surface'))
             .border({ width: 1, color: $r('app.color.divider') })
-            .accessibilityText('退出搜索')
+            .accessibilityText(localized('退出搜索'))
             .onClick(() => {
               this.exitSearchMode();
             })
@@ -496,7 +497,7 @@ struct Index {
         .width('100%')
       } else {
         Row({ space: 8 }) {
-          Text(`${this.selectedCategoryName} · ${this.visibleArchiveCount}`)
+          Text(`${this.selectedCategoryId.length === 0 ? localized('全部') : this.selectedCategoryName} · ${this.visibleArchiveCount}`)
             .copyOption(CopyOptions.LocalDevice)
             .fontSize(15)
             .fontWeight(FontWeight.Medium)
@@ -517,7 +518,7 @@ struct Index {
             .borderRadius(20)
             .backgroundColor($r('app.color.surface'))
             .border({ width: 1, color: $r('app.color.divider') })
-            .accessibilityText('搜索档案')
+            .accessibilityText(localized('搜索档案'))
             .onClick(() => {
               this.enterSearchMode();
             })
@@ -536,7 +537,7 @@ struct Index {
             .backgroundColor(this.selectedCategoryId.length > 0 ?
               $r('app.color.accent_soft') : $r('app.color.surface'))
             .border({ width: 1, color: $r('app.color.divider') })
-            .accessibilityText(`选择分类，当前为${this.selectedCategoryName}`)
+            .accessibilityText(`${localized('选择分类')}，${localized('当前为', 'current')}: ${this.selectedCategoryName}`)
             .onClick(() => {
               this.isSortPopupVisible = false;
               this.isCategoryPopupVisible = !this.isCategoryPopupVisible;
@@ -563,7 +564,7 @@ struct Index {
             .height(40)
             .borderRadius(20)
             .backgroundColor($r('app.color.accent_soft'))
-            .accessibilityText(`排序，当前为${this.sortModeLabel()}${this.sortAscending ? '升序' : '降序'}`)
+            .accessibilityText(`${localized('排序')}，${localized('当前为', 'current')}: ${this.sortModeLabel()}, ${localized(this.sortAscending ? '升序' : '降序')}`)
             .onClick(() => {
               this.isCategoryPopupVisible = false;
               this.isSortPopupVisible = !this.isSortPopupVisible;
@@ -591,7 +592,7 @@ struct Index {
             .borderRadius(20)
             .enabled(!this.isLibraryLoading)
             .backgroundColor($r('app.color.accent_soft'))
-            .accessibilityText('刷新档案库')
+            .accessibilityText(localized('刷新档案库'))
             .onClick(() => {
               this.reloadLibrary();
             })
@@ -608,7 +609,7 @@ struct Index {
             .borderRadius(20)
             .backgroundColor($r('app.color.surface'))
             .border({ width: 1, color: $r('app.color.divider') })
-            .accessibilityText('应用设置')
+            .accessibilityText(localized('应用设置'))
             .onClick(() => {
               this.pathStack.pushPath({
                 name: 'Settings',
@@ -704,7 +705,7 @@ struct Index {
   @Builder
   private categoryPopup() {
     Column({ space: 4 }) {
-      Text('分类')
+      Text(localized('分类'))
         .copyOption(CopyOptions.LocalDevice)
         .fontSize(14)
         .fontWeight(FontWeight.Bold)
@@ -714,7 +715,7 @@ struct Index {
 
       List({ space: 2 }) {
         ListItem() {
-          this.categoryPopupOption('全部', '')
+          this.categoryPopupOption(localized('全部'), '')
         }
         ForEach(this.categories, (category: CategoryItem) => {
           ListItem() {
@@ -767,13 +768,13 @@ struct Index {
   private sortPopup() {
     Column({ space: 6 }) {
       Row() {
-        Text('排序方式')
+        Text(localized('排序方式'))
           .copyOption(CopyOptions.LocalDevice)
           .fontSize(14)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.text_primary'))
           .layoutWeight(1)
-        Text(this.sortAscending ? '升序' : '降序')
+        Text(localized(this.sortAscending ? '升序' : '降序'))
           .copyOption(CopyOptions.LocalDevice)
           .fontSize(13)
           .fontColor($r('app.color.text_tertiary'))
@@ -793,7 +794,7 @@ struct Index {
       .scrollBar(BarState.Auto)
 
       Row({ space: 8 }) {
-        Button('升序 ↑')
+        Button(`${localized('升序')} ↑`)
           .height(38)
           .fontSize(14)
           .fontColor(this.sortAscending ? Color.White : $r('app.color.accent_text'))
@@ -803,7 +804,7 @@ struct Index {
           .onClick(() => {
             this.applySortDirection(true);
           })
-        Button('降序 ↓')
+        Button(`${localized('降序')} ↓`)
           .height(38)
           .fontSize(14)
           .fontColor(this.sortAscending ? $r('app.color.accent_text') : Color.White)
@@ -982,11 +983,11 @@ struct Index {
         this.restoreCachedLibrary(config.serverUrl);
       } else {
         this.isConnected = false;
-        this.libraryError = '请先在设置中配置服务器，然后点击刷新获取档案索引';
+        this.libraryError = localized('请先在设置中配置服务器，然后点击刷新获取档案索引');
       }
     } catch (error) {
       this.isConnected = false;
-      this.libraryError = '请先在设置中配置服务器，然后点击刷新获取档案索引';
+      this.libraryError = localized('请先在设置中配置服务器，然后点击刷新获取档案索引');
     }
   }
 
@@ -999,7 +1000,7 @@ struct Index {
       return;
     }
     if (this.serverUrl.trim().length === 0) {
-      this.errorMessage = '请输入 LANraragi 服务器地址';
+      this.errorMessage = localized('请输入 LANraragi 服务器地址');
       return;
     }
 
@@ -1027,7 +1028,7 @@ struct Index {
 
   private async reloadLibrary(): Promise<void> {
     if (this.serverUrl.length === 0) {
-      this.libraryError = '请先在设置中配置服务器';
+      this.libraryError = localized('请先在设置中配置服务器');
       return;
     }
     try {
@@ -1081,7 +1082,7 @@ struct Index {
       this.categories = [];
       this.archiveDataSource.replace([]);
       this.visibleArchiveCount = 0;
-      this.libraryError = '暂无本地档案索引，请点击右上角刷新';
+      this.libraryError = localized('暂无本地档案索引，请点击右上角刷新');
       return;
     }
     this.completeArchiveIndex = cached.archives;
@@ -1113,7 +1114,7 @@ struct Index {
           }
         }
         if (selectedCategory === undefined) {
-          throw new Error('本地分类信息不存在，请手动刷新书库');
+          throw new Error(localized('本地分类信息不存在，请手动刷新书库'));
         }
         const archiveIds: Array<string> = selectedCategory.archiveIds;
         this.allArchives = this.completeArchiveIndex.filter((archive: ArchiveItem) => {
@@ -1235,18 +1236,18 @@ struct Index {
 
   private sortModeLabels(): Array<string> {
     return [
-      '添加时间',
-      '标题',
-      '页数',
-      '阅读进度',
-      '阅读状态',
-      'NEW 状态',
-      '艺术家',
-      '团体',
-      '活动',
-      '系列',
-      '角色',
-      '原作'
+      localized('添加时间'),
+      localized('标题'),
+      localized('页数'),
+      localized('阅读进度'),
+      localized('阅读状态'),
+      localized('NEW 状态'),
+      localized('艺术家'),
+      localized('团体'),
+      localized('活动'),
+      localized('系列'),
+      localized('角色'),
+      localized('原作')
     ];
   }
 
@@ -1372,7 +1373,7 @@ struct Index {
     this.pathStack.clear();
     try {
       this.getUIContext().getPromptAction().showToast({
-        message: '档案已删除'
+        message: localized('档案已删除')
       });
     } catch (error) {
       // The card has already been removed even if a toast cannot be displayed.
@@ -1512,6 +1513,6 @@ struct Index {
     if (error instanceof Error && error.message.length > 0) {
       return error.message;
     }
-    return '连接失败，请检查服务器地址、API Key 和网络状态';
+    return localized('连接失败，请检查服务器地址、API Key 和网络状态');
   }
 }
