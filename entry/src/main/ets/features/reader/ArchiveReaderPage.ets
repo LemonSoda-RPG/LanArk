@@ -16,6 +16,32 @@ import {
   ServerConfig
 } from '../../domain/model/LanraragiModels';
 
+// Keep the decoded page at a useful reading resolution instead of decoding an
+// arbitrarily large source image and asking the renderer to shrink it later.
+// These limits mirror LANreader's ImageService policy and leave enough detail
+// for page zoom while avoiding the worst aliasing/memory cases.
+const MAX_READER_DECODE_LONG_EDGE: number = 4096;
+const MAX_READER_DECODE_BYTES: number = 64 * 1024 * 1024;
+const RGBA_BYTES_PER_PIXEL: number = 4;
+
+function readerDecodeSize(info: image.ImageInfo): image.Size | undefined {
+  const sourceWidth: number = Math.max(Math.floor(info.size.width), 1);
+  const sourceHeight: number = Math.max(Math.floor(info.size.height), 1);
+  const sourceLongEdge: number = Math.max(sourceWidth, sourceHeight);
+  const sourceBytes: number = sourceWidth * sourceHeight * RGBA_BYTES_PER_PIXEL;
+  const edgeScale: number = MAX_READER_DECODE_LONG_EDGE / sourceLongEdge;
+  const byteScale: number = Math.sqrt(MAX_READER_DECODE_BYTES / sourceBytes);
+  const scale: number = Math.min(1, edgeScale, byteScale);
+
+  if (scale >= 1) {
+    return undefined;
+  }
+  return {
+    width: Math.max(Math.floor(sourceWidth * scale), 1),
+    height: Math.max(Math.floor(sourceHeight * scale), 1)
+  };
+}
+
 function emptyArchive(): ArchiveItem {
   const payload: ArchiveIndexPayload = {
     arcid: '',
@@ -202,17 +228,20 @@ struct ReaderImageView {
               .width('100%')
               .aspectRatio(this.imageAspectRatio)
               .objectFit(ImageFit.Fill)
+              .interpolation(ImageInterpolation.High)
           } else {
             Image(this.pixelMap as image.PixelMap)
               .height('100%')
               .aspectRatio(this.imageAspectRatio)
               .objectFit(ImageFit.Fill)
+              .interpolation(ImageInterpolation.High)
           }
         } else {
           Image(this.pixelMap as image.PixelMap)
             .width('100%')
             .height('100%')
             .objectFit(ImageFit.Contain)
+            .interpolation(ImageInterpolation.High)
         }
       } else if (this.isLoading) {
         Column({ space: 12 }) {
@@ -280,7 +309,14 @@ struct ReaderImageView {
         if (imageInfo.size.width > 0 && imageInfo.size.height > 0) {
           this.imageAspectRatio = imageInfo.size.width / imageInfo.size.height;
         }
-        this.pixelMap = await source.createPixelMap();
+        const decodeSize: image.Size | undefined = readerDecodeSize(imageInfo);
+        if (decodeSize === undefined) {
+          this.pixelMap = await source.createPixelMap();
+        } else {
+          this.pixelMap = await source.createPixelMap({
+            desiredSize: decodeSize
+          });
+        }
         if (shouldCache) {
           cache.writePage(this.archiveId, this.page.pageNumber, buffer);
         }
