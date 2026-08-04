@@ -8,7 +8,7 @@ LanArk 是一个面向 HarmonyOS NEXT 的原生 ArkTS/ArkUI LANraragi 阅读器�
 - HarmonyOS 应用包名：`com.lanark.reader`
 - 模块：`entry`
 - 支持设备：`phone`、`tablet`
-- 屏幕方向：跟随设备自动旋转
+- 屏幕方向：跟随设备自动旋转，并遵守系统旋转锁定开关
 - 编译目标：HarmonyOS `6.1.1(24)`
 - 应用模型：Stage model
 - UI 技术：ArkTS + ArkUI

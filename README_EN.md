@@ -16,7 +16,7 @@ LanArk is a native HarmonyOS NEXT LANraragi reader written in ArkTS and ArkUI. I
 - Configurable page preloading
 - Fixed high-resolution decode policy for large source images
 - Selectable image interpolation: nearest neighbor, bilinear, MipMap, or cubic
-- Dark mode, portrait/landscape rotation, phone/tablet layout adaptation
+- Dark mode, portrait/landscape rotation that respects the system rotation lock, and phone/tablet layout adaptation
 - English resources and automatic English UI labels when the system language is English
 
 ## Requirements
