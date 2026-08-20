@@ -1,4 +1,6 @@
 import { common } from '@kit.AbilityKit';
+import { image } from '@kit.ImageKit';
+import { ImageDiskCache } from '../cache/ImageDiskCache';
 import { OfflineArchiveCache } from '../cache/OfflineArchiveCache';
 import { LanraragiApiClient } from '../network/LanraragiApiClient';
 import {
@@ -122,8 +124,10 @@ export class DownloadManager {
     task.status = 'downloading';
     task.updatedAt = Date.now();
     const cache: OfflineArchiveCache = new OfflineArchiveCache(context, config.serverUrl);
+    const imageCache: ImageDiskCache = new ImageDiskCache(context, config.serverUrl);
     const client: LanraragiApiClient =
       new LanraragiApiClient(config.serverUrl, config.apiKey);
+    await DownloadManager.cacheCover(client, imageCache, archive.id);
     const pages: Array<ReaderPage> = await client.fetchArchivePages(archive.id);
     if (pages.length === 0) {
       throw new Error(localized('离线档案页面列表为空'));
@@ -149,6 +153,43 @@ export class DownloadManager {
     task.status = 'completed';
     task.errorMessage = '';
     task.updatedAt = Date.now();
+  }
+
+  private static async cacheCover(
+    client: LanraragiApiClient,
+    cache: ImageDiskCache,
+    archiveId: string
+  ): Promise<void> {
+    if (cache.readCover(archiveId) !== undefined) {
+      return;
+    }
+    try {
+      const data: ArrayBuffer | undefined = await client.fetchArchiveThumbnail(archiveId);
+      if (data === undefined) {
+        return;
+      }
+      const source: image.ImageSource = image.createImageSource(data);
+      let cover: image.PixelMap | undefined = undefined;
+      try {
+        const info: image.ImageInfo = await source.getImageInfo();
+        let width: number = Math.min(Math.max(info.size.width, 1), 480);
+        let height: number = info.size.width > 0 ?
+          Math.max(Math.round(info.size.height * width / info.size.width), 1) : 720;
+        if (height > 720) {
+          width = Math.max(Math.round(width * 720 / height), 1);
+          height = 720;
+        }
+        cover = await source.createPixelMap({ desiredSize: { width, height } });
+        await cache.writeCover(archiveId, cover);
+      } finally {
+        if (cover !== undefined) {
+          cover.release();
+        }
+        await source.release();
+      }
+    } catch (error) {
+      // A cover is optional; page downloading must continue when it fails.
+    }
   }
 
   private static fail(task: DownloadTask, error: Object): void {
