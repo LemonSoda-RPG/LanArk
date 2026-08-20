@@ -3,6 +3,7 @@ import { window } from '@kit.ArkUI';
 import { image } from '@kit.ImageKit';
 import { ImageDiskCache } from '../../data/cache/ImageDiskCache';
 import { OfflineArchiveCache, OfflineArchiveRecord } from '../../data/cache/OfflineArchiveCache';
+import { OfflineProgressRepository } from '../../data/download/OfflineProgressRepository';
 import {
   ReaderSettings,
   ReaderSettingsRepository
@@ -384,6 +385,7 @@ export struct ArchiveReaderPage {
   @State private doublePageOffset: number = 0;
   @State private preloadPageCount: number = 3;
   @State private interpolationIndex: number = 3;
+  @State private offlineProgress: number = 0;
   @State private readerViewportWidth: number = 1;
   @State private waterfallScale: number = 1;
   @State private pageZoomScale: number = 1;
@@ -864,8 +866,17 @@ export struct ArchiveReaderPage {
       }
       const context: common.UIAbilityContext =
         this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const config: ServerConfig = await this.repository().load();
-      this.serverUrl = config.serverUrl;
+      let config: ServerConfig = new ServerConfig();
+      try {
+        config = await this.repository().load();
+      } catch (configError) {
+        if (!this.params.offline) {
+          throw configError instanceof Error ? configError :
+            new Error(localized('请先在设置中配置服务器'));
+        }
+      }
+      this.serverUrl = this.params.offlineServerUrl.length > 0 ?
+        this.params.offlineServerUrl : config.serverUrl;
       this.apiKey = config.apiKey;
       const offlineCache: OfflineArchiveCache =
         new OfflineArchiveCache(context, this.serverUrl);
@@ -886,6 +897,10 @@ export struct ArchiveReaderPage {
       this.pages = loadedPages;
       this.pageDataSource.replace(loadedPages);
       this.rebuildSpreads();
+      if (this.params.offline) {
+        this.offlineProgress = await new OfflineProgressRepository(context)
+          .load(this.params.archive.id);
+      }
       const initialIndex: number = this.initialPageIndex(loadedPages.length);
       this.currentPageIndex = this.readerModeIndex === 1 ?
         this.spreadEndIndexForPage(initialIndex) : initialIndex;
@@ -900,6 +915,12 @@ export struct ArchiveReaderPage {
   }
 
   private initialPageIndex(pageCount: number): number {
+    if (this.params.offline) {
+      if (this.params.fromStart || this.offlineProgress <= 0) {
+        return 0;
+      }
+      return Math.min(Math.max(this.offlineProgress - 1, 0), pageCount - 1);
+    }
     if (this.params.fromStart || this.params.archive.progress <= 0) {
       return 0;
     }
@@ -1107,6 +1128,16 @@ export struct ArchiveReaderPage {
 
   private async syncProgress(page: ReaderPage): Promise<void> {
     console.info(`[ProgressDebug] reader progress archive=${this.params.archive.id} page=${page.pageNumber}`);
+    if (this.params.offline) {
+      this.offlineProgress = page.pageNumber;
+      const context: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext;
+      await new OfflineProgressRepository(context).save(
+        this.params.archive.id,
+        page.pageNumber
+      );
+      return;
+    }
     this.onProgressChanged(this.params.archive.id, page.pageNumber);
     if (this.serverUrl.length === 0 || this.params.archive.id.length === 0) {
       return;

@@ -264,9 +264,18 @@ export class ReaderPage {
 export class ReaderRouteParams {
   readonly archive: ArchiveItem;
   readonly fromStart: boolean;
+  readonly offline: boolean;
+  readonly offlineServerUrl: string;
 
-  constructor(archive: ArchiveItem, fromStart: boolean) {
+  constructor(
+    archive: ArchiveItem,
+    fromStart: boolean,
+    offline: boolean = false,
+    offlineServerUrl: string = ''
+  ) {
     this.archive = archive;
     this.fromStart = fromStart;
+    this.offline = offline;
+    this.offlineServerUrl = offlineServerUrl;
   }
 }

@@ -3,6 +3,7 @@ import { OfflineArchiveCache } from '../../data/cache/OfflineArchiveCache';
 import { ServerConfigRepository } from '../../data/config/ServerConfigRepository';
 import { LanraragiApiClient } from '../../data/network/LanraragiApiClient';
 import { DownloadManager, DownloadTask } from '../../data/download/DownloadManager';
+import { OfflineProgressRepository } from '../../data/download/OfflineProgressRepository';
 import {
   ArchiveIndexPayload,
   ArchiveItem,
@@ -354,6 +355,7 @@ export struct ArchiveInfoPage {
       await client.deleteArchive(this.archive.id);
       new OfflineArchiveCache(context, config.serverUrl).clearArchive(this.archive.id);
       DownloadManager.forget(this.archive.id);
+      await new OfflineProgressRepository(context).clear(this.archive.id);
       this.onArchiveDeleted(this.archive.id);
     } catch (error) {
       this.deleteError = this.describeError(error);

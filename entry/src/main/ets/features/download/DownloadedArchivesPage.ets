@@ -1,6 +1,7 @@
 import { common } from '@kit.AbilityKit';
 import { OfflineArchiveCache, OfflineArchiveRecord } from '../../data/cache/OfflineArchiveCache';
 import { ServerConfigRepository } from '../../data/config/ServerConfigRepository';
+import { OfflineProgressRepository } from '../../data/download/OfflineProgressRepository';
 import { ArchiveItem, ReaderRouteParams, ServerConfig } from '../../domain/model/LanraragiModels';
 import { localized } from '../../common/Localization';
 
@@ -79,7 +80,12 @@ export struct DownloadedArchivesPage {
               .onClick(() => {
                 this.pathStack.pushPath({
                   name: 'ArchiveReader',
-                  param: new ReaderRouteParams(record.archive, false)
+                  param: new ReaderRouteParams(
+                    record.archive,
+                    false,
+                    true,
+                    this.serverUrl
+                  )
                 });
               })
             }, (record: OfflineArchiveRecord) => `offline-${record.archive.id}`)
@@ -145,7 +151,17 @@ export struct DownloadedArchivesPage {
         this.getUIContext().getHostContext() as common.UIAbilityContext;
       const config: ServerConfig = await new ServerConfigRepository(context).load();
       this.serverUrl = config.serverUrl;
-      this.records = new OfflineArchiveCache(context, config.serverUrl).listRecords();
+      const records: Array<OfflineArchiveRecord> =
+        new OfflineArchiveCache(context, config.serverUrl).listRecords();
+      const progressRepository: OfflineProgressRepository =
+        new OfflineProgressRepository(context);
+      for (let index = 0; index < records.length; index += 1) {
+        const progress: number = await progressRepository.load(records[index].archive.id);
+        if (progress > 0) {
+          records[index].archive.setProgress(progress);
+        }
+      }
+      this.records = records;
     } catch (error) {
       this.records = [];
     }
