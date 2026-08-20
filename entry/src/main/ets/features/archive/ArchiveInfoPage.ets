@@ -1,6 +1,8 @@
 import { common } from '@kit.AbilityKit';
+import { OfflineArchiveCache } from '../../data/cache/OfflineArchiveCache';
 import { ServerConfigRepository } from '../../data/config/ServerConfigRepository';
 import { LanraragiApiClient } from '../../data/network/LanraragiApiClient';
+import { DownloadManager, DownloadTask } from '../../data/download/DownloadManager';
 import {
   ArchiveIndexPayload,
   ArchiveItem,
@@ -33,6 +35,23 @@ export struct ArchiveInfoPage {
   onArchiveDeleted: (archiveId: string) => void = (archiveId: string): void => {};
   @State private isDeleting: boolean = false;
   @State private deleteError: string = '';
+  @State private downloadTask: DownloadTask | undefined = undefined;
+  @State private isDownloaded: boolean = false;
+  private downloadRefreshTimer: number = -1;
+
+  aboutToAppear(): void {
+    this.refreshDownloadState();
+    this.downloadRefreshTimer = setInterval(() => {
+      this.refreshDownloadState();
+    }, 500);
+  }
+
+  aboutToDisappear(): void {
+    if (this.downloadRefreshTimer >= 0) {
+      clearInterval(this.downloadRefreshTimer);
+      this.downloadRefreshTimer = -1;
+    }
+  }
 
   build() {
     NavDestination() {
@@ -74,6 +93,9 @@ export struct ArchiveInfoPage {
             this.tagSection()
           }
           ListItem() {
+            this.downloadSection()
+          }
+          ListItem() {
             this.dangerSection()
           }
         }
@@ -88,6 +110,85 @@ export struct ArchiveInfoPage {
     }
     .hideTitleBar(true)
     .backgroundColor($r('app.color.page_background'))
+  }
+
+  @Builder
+  private downloadSection() {
+    Column({ space: 12 }) {
+      Row() {
+        Text(localized('离线阅读'))
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(17)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('app.color.text_primary'))
+          .layoutWeight(1)
+        if (this.isDownloaded) {
+          Text(localized('已下载'))
+            .copyOption(CopyOptions.LocalDevice)
+            .fontSize(13)
+            .fontColor($r('app.color.accent_text'))
+        }
+      }
+      .width('100%')
+
+      Text(localized('下载到应用内后可在无网络时阅读，下载内容不会修改服务器中的原始档案。'))
+        .copyOption(CopyOptions.LocalDevice)
+        .fontSize(13)
+        .lineHeight(19)
+        .fontColor($r('app.color.text_secondary'))
+        .width('100%')
+
+      if (this.downloadTask !== undefined &&
+        (this.downloadTask.status === 'downloading' || this.downloadTask.status === 'queued')) {
+        Progress({
+          value: this.downloadTask.completedPages,
+          total: Math.max(this.downloadTask.totalPages, 1),
+          type: ProgressType.Linear
+        })
+          .width('100%')
+          .height(6)
+          .color($r('app.color.accent'))
+          .backgroundColor($r('app.color.surface_muted'))
+        Text(`${this.downloadTask.completedPages}/${this.downloadTask.totalPages} ${localized('页', 'pages')} · ${localized('下载中')}`)
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(12)
+          .fontColor($r('app.color.text_tertiary'))
+          .width('100%')
+      }
+
+      if (this.downloadTask !== undefined && this.downloadTask.status === 'failed') {
+        Text(this.downloadTask.errorMessage)
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(13)
+          .fontColor($r('app.color.error'))
+          .width('100%')
+          .padding(10)
+          .backgroundColor($r('app.color.error_soft'))
+          .borderRadius(10)
+      }
+
+      Button(this.isDownloaded ? localized('已下载，可离线阅读') :
+        (this.downloadTask !== undefined && this.downloadTask.status === 'downloading' ?
+          localized('下载管理中') : localized('下载当前档案')))
+        .width('100%')
+        .height(48)
+        .enabled(!this.isDownloaded &&
+          (this.downloadTask === undefined ||
+            (this.downloadTask.status !== 'downloading' && this.downloadTask.status !== 'queued')))
+        .fontSize(15)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.isDownloaded ? $r('app.color.accent_text') : Color.White)
+        .backgroundColor(this.isDownloaded ?
+          $r('app.color.accent_soft') : $r('app.color.accent'))
+        .onClick(() => {
+          this.startDownload();
+        })
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor($r('app.color.surface'))
+    .border({ width: 1, color: $r('app.color.divider') })
+    .borderRadius(16)
   }
 
   @Builder
@@ -245,10 +346,14 @@ export struct ArchiveInfoPage {
     this.isDeleting = true;
     this.deleteError = '';
     try {
+      const context: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext;
       const config: ServerConfig = await this.repository().load();
       const client: LanraragiApiClient =
         new LanraragiApiClient(config.serverUrl, config.apiKey);
       await client.deleteArchive(this.archive.id);
+      new OfflineArchiveCache(context, config.serverUrl).clearArchive(this.archive.id);
+      DownloadManager.forget(this.archive.id);
       this.onArchiveDeleted(this.archive.id);
     } catch (error) {
       this.deleteError = this.describeError(error);
@@ -261,6 +366,51 @@ export struct ArchiveInfoPage {
     const context: common.UIAbilityContext =
       this.getUIContext().getHostContext() as common.UIAbilityContext;
     return new ServerConfigRepository(context);
+  }
+
+  private async startDownload(): Promise<void> {
+    if (this.archive.id.length === 0 || this.isDownloaded) {
+      return;
+    }
+    try {
+      const context: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const config: ServerConfig = await this.repository().load();
+      DownloadManager.start(context, config, this.archive);
+      this.downloadTask = DownloadManager.taskFor(this.archive.id);
+    } catch (error) {
+      this.downloadTask = new DownloadTask(
+        this.archive.id,
+        this.archive.title,
+        this.archive.pageCount,
+        0,
+        'failed',
+        this.describeDownloadError(error)
+      );
+    }
+  }
+
+  private async refreshDownloadState(): Promise<void> {
+    try {
+      const context: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const task: DownloadTask | undefined = DownloadManager.taskFor(this.archive.id);
+      this.downloadTask = task;
+      const config: ServerConfig = await this.repository().load();
+      if (config.serverUrl.length > 0) {
+        this.isDownloaded = new OfflineArchiveCache(context, config.serverUrl)
+          .isDownloaded(this.archive.id);
+      }
+    } catch (error) {
+      this.isDownloaded = false;
+    }
+  }
+
+  private describeDownloadError(error: Object): string {
+    if (error instanceof Error && error.message.length > 0) {
+      return error.message;
+    }
+    return localized('下载档案失败');
   }
 
   private describeError(error: Object): string {

@@ -2,6 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { window } from '@kit.ArkUI';
 import { image } from '@kit.ImageKit';
 import { ImageDiskCache } from '../../data/cache/ImageDiskCache';
+import { OfflineArchiveCache, OfflineArchiveRecord } from '../../data/cache/OfflineArchiveCache';
 import {
   ReaderSettings,
   ReaderSettingsRepository
@@ -306,12 +307,22 @@ struct ReaderImageView {
       const context: common.UIAbilityContext =
         this.getUIContext().getHostContext() as common.UIAbilityContext;
       const cache: ImageDiskCache = new ImageDiskCache(context, this.serverUrl);
-      let buffer: ArrayBuffer | undefined =
-        cache.readPage(this.archiveId, this.page.pageNumber);
-      let shouldCache: boolean = false;
-      const client: LanraragiApiClient =
-        new LanraragiApiClient(this.serverUrl, this.apiKey);
+      const offlineCache: OfflineArchiveCache =
+        new OfflineArchiveCache(context, this.serverUrl);
+      let buffer: ArrayBuffer | undefined = offlineCache.readPage(
+        this.archiveId,
+        this.page.pageNumber
+      );
       if (buffer === undefined) {
+        buffer = cache.readPage(this.archiveId, this.page.pageNumber);
+      }
+      let shouldCache: boolean = false;
+      if (buffer === undefined) {
+        if (this.serverUrl.length === 0) {
+          throw new Error(localized('离线页面不存在，请重新下载档案'));
+        }
+        const client: LanraragiApiClient =
+          new LanraragiApiClient(this.serverUrl, this.apiKey);
         buffer = await client.fetchArchivePage(this.page, this.archiveId);
         shouldCache = buffer !== undefined;
       }
@@ -851,13 +862,24 @@ export struct ArchiveReaderPage {
       } catch (settingsError) {
         // Reader defaults remain available if local preferences cannot be read.
       }
+      const context: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext;
       const config: ServerConfig = await this.repository().load();
       this.serverUrl = config.serverUrl;
       this.apiKey = config.apiKey;
-      const client: LanraragiApiClient =
-        new LanraragiApiClient(config.serverUrl, config.apiKey);
-      const loadedPages: Array<ReaderPage> =
-        await client.fetchArchivePages(this.params.archive.id);
+      const offlineCache: OfflineArchiveCache =
+        new OfflineArchiveCache(context, this.serverUrl);
+      const offlineRecord: OfflineArchiveRecord | undefined =
+        offlineCache.readRecord(this.params.archive.id);
+      let loadedPages: Array<ReaderPage> = offlineRecord?.pages ?? [];
+      if (loadedPages.length === 0) {
+        if (config.serverUrl.length === 0) {
+          throw new Error(localized('请先在设置中配置服务器'));
+        }
+        const client: LanraragiApiClient =
+          new LanraragiApiClient(config.serverUrl, config.apiKey);
+        loadedPages = await client.fetchArchivePages(this.params.archive.id);
+      }
       if (loadedPages.length === 0) {
          throw new Error(localized('服务器返回的页面列表为空'));
       }

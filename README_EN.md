@@ -14,6 +14,8 @@ LanArk is a native HarmonyOS NEXT LANraragi reader written in ArkTS and ArkUI. I
 - Left-to-right and right-to-left reading directions
 - Tap-to-turn pages, page slider, pinch zoom, and panning
 - Configurable page preloading
+- In-app offline archive downloads, with per-page progress and resumable partial downloads
+- Downloaded archive library and download manager pages
 - Fixed high-resolution decode policy for large source images
 - Selectable image interpolation: nearest neighbor, bilinear, MipMap, or cubic
 - Dark mode, portrait/landscape rotation that respects the system rotation lock, and phone/tablet layout adaptation
@@ -145,6 +147,8 @@ Original encoded page bytes are cached locally for the current reading session. 
 - The app only reads the configured LANraragi server.
 - It synchronizes reading progress and does not delete server documents during normal reading.
 - Covers and temporary reading pages are stored in the app sandbox.
+- Explicitly downloaded pages are kept in a separate persistent offline directory and are not removed by **Clear image cache**.
+- Only complete downloads appear in the Downloaded page; interrupted downloads keep their partial pages and can be retried from Download manager.
 - The Settings page can clear local image caches.
 - Server URL, API key, signing files, generated HAPs, and personal paths are excluded from the public source package.
 

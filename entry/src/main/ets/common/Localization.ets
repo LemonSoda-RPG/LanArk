@@ -174,6 +174,30 @@ const TRANSLATIONS: Record<string, string> = {
   '服务器返回的页面列表为空': 'The server returned an empty page list',
   '未读': 'Unread',
   '已读完': 'Completed'
+  , '已下载': 'Downloaded'
+  , '下载管理': 'Download manager'
+  , '离线阅读': 'Offline reading'
+  , '下载到应用内后可在无网络时阅读，下载内容不会修改服务器中的原始档案。':
+    'Downloaded pages stay inside the app for offline reading and do not modify the original server archive.'
+  , '下载当前档案': 'Download this archive'
+  , '已下载，可离线阅读': 'Downloaded · available offline'
+  , '下载管理中': 'Download is managed in the download manager'
+  , '下载中': 'Downloading'
+  , '排队中': 'Queued'
+  , '已完成': 'Completed'
+  , '下载失败': 'Download failed'
+  , '下载完成': 'Download complete'
+  , '下载档案失败': 'Could not download the archive'
+  , '下载页面失败': 'Could not download page'
+  , '离线档案页面列表为空': 'The offline archive returned no pages'
+  , '离线页面不存在，请重新下载档案': 'This offline page is missing. Download the archive again.'
+  , '没有已下载档案': 'No downloaded archives'
+  , '可离线阅读': 'available offline'
+  , '在档案信息中点击下载，即可在无网络时阅读。':
+    'Tap Download in archive information to read without a network connection.'
+  , '暂无下载任务': 'No download tasks'
+  , '开始下载后，这里会显示实时进度。': 'Active download progress will appear here.'
+  , '返回已下载': 'Back to downloaded archives'
 };
 
 export function localized(chinese: string, english?: string): string {

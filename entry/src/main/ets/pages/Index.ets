@@ -22,6 +22,8 @@ import { ArchiveDetailPage } from '../features/archive/ArchiveDetailPage';
 import { ArchiveInfoPage } from '../features/archive/ArchiveInfoPage';
 import { ArchiveReaderPage } from '../features/reader/ArchiveReaderPage';
 import { SettingsPage } from '../features/settings/SettingsPage';
+import { DownloadedArchivesPage } from '../features/download/DownloadedArchivesPage';
+import { DownloadManagerPage } from '../features/download/DownloadManagerPage';
 import { localized } from '../common/Localization';
 
 class ArchiveDataSource implements IDataSource {
@@ -110,7 +112,7 @@ struct ArchiveNewBadge {
 }
 
 @Component
-struct ArchiveCoverView {
+export struct ArchiveCoverView {
   archiveId: string = '';
   fileExtension: string = '';
   serverUrl: string = '';
@@ -324,6 +326,10 @@ struct Index {
           this.applyLibrarySettings(settings);
         }
       })
+    } else if (name === 'DownloadedArchives') {
+      DownloadedArchivesPage()
+    } else if (name === 'DownloadManager') {
+      DownloadManagerPage()
     }
   }
 
@@ -613,6 +619,26 @@ struct Index {
             .onClick(() => {
               this.pathStack.pushPath({
                 name: 'Settings',
+                param: new Object()
+              });
+            })
+
+          Button() {
+            Image($r('app.media.icon_download'))
+              .width(19)
+              .height(19)
+              .renderMode(ImageRenderMode.Template)
+              .fillColor($r('app.color.text_secondary'))
+          }
+            .width(40)
+            .height(40)
+            .borderRadius(20)
+            .backgroundColor($r('app.color.surface'))
+            .border({ width: 1, color: $r('app.color.divider') })
+            .accessibilityText(localized('已下载'))
+            .onClick(() => {
+              this.pathStack.pushPath({
+                name: 'DownloadedArchives',
                 param: new Object()
               });
             })
