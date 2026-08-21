@@ -13,11 +13,19 @@ import {
 } from '../../data/config/ReaderSettingsRepository';
 import { ServerConfigRepository } from '../../data/config/ServerConfigRepository';
 import { LanraragiApiClient } from '../../data/network/LanraragiApiClient';
-import { ServerConfig } from '../../domain/model/LanraragiModels';
+import { ServerConfig, ServerProfile } from '../../domain/model/LanraragiModels';
 import { localized } from '../../common/Localization';
 
 interface CacheDialogResult {
   index: number;
+}
+
+class ServerProfileSelectOption {
+  readonly value: string;
+
+  constructor(value: string) {
+    this.value = value;
+  }
 }
 
 @Component
@@ -29,13 +37,15 @@ export struct SettingsPage {
     (settings: LibrarySettings): void => {};
   @State private serverUrl: string = '';
   @State private apiKey: string = '';
+  @State private serverProfiles: Array<ServerProfile> = [];
+  @State private selectedServerProfileIndex: number = -1;
   @State private directionIndex: number = 0;
   @State private readerModeIndex: number = 0;
   @State private doublePageOffset: number = 0;
   @State private preloadPageCount: number = 3;
   @State private interpolationIndex: number = 3;
   @State private hideCompleted: boolean = false;
-  @State private gridLayout: boolean = false;
+  @State private gridLayout: boolean = true;
   @State private gridColumns: number = 0;
   @State private isServerBusy: boolean = false;
   @State private serverMessage: string = '';
@@ -123,6 +133,49 @@ export struct SettingsPage {
     Column({ space: 14 }) {
       this.sectionTitle(localized('服务器连接'), localized('修改后需要验证才能保存'))
 
+      Column({ space: 8 }) {
+        Text(localized('保存的服务器'))
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_secondary'))
+          .width('100%')
+        if (this.serverProfiles.length > 0) {
+          Select(this.serverProfiles.map((profile: ServerProfile) => {
+            return new ServerProfileSelectOption(profile.name);
+          }))
+            .selected(Math.max(this.selectedServerProfileIndex, 0))
+            .value(this.selectedServerProfileLabel())
+            .height(46)
+            .fontColor($r('app.color.text_primary'))
+            .selectedOptionFontColor(Color.White)
+            .selectedOptionBgColor($r('app.color.accent'))
+            .optionFontColor($r('app.color.text_primary'))
+            .optionBgColor($r('app.color.surface'))
+            .backgroundColor($r('app.color.surface_muted'))
+            .width('100%')
+            .onSelect((index: number, value: string) => {
+              this.selectServerProfile(index);
+            })
+        } else {
+          Text(localized('没有保存的服务器'))
+            .copyOption(CopyOptions.LocalDevice)
+            .fontSize(12)
+            .fontColor($r('app.color.text_tertiary'))
+            .width('100%')
+        }
+        Button(localized('新增服务器'))
+          .height(40)
+          .fontSize(13)
+          .fontColor($r('app.color.accent'))
+          .backgroundColor($r('app.color.accent_soft'))
+          .width('100%')
+          .onClick(() => {
+            this.startNewServer();
+          })
+      }
+      .width('100%')
+
       Column({ space: 7 }) {
         Text(localized('服务器地址'))
           .copyOption(CopyOptions.LocalDevice)
@@ -209,6 +262,19 @@ export struct SettingsPage {
           })
       }
       .width('100%')
+
+      if (this.selectedServerProfileIndex >= 0 && this.serverProfiles.length > 0) {
+        Button(localized('删除当前服务器'))
+          .height(42)
+          .fontSize(14)
+          .fontColor($r('app.color.error'))
+          .backgroundColor($r('app.color.error_soft'))
+          .enabled(!this.isServerBusy)
+          .width('100%')
+          .onClick(() => {
+            this.confirmDeleteServer();
+          })
+      }
     }
     .width('100%')
     .padding(16)
@@ -678,9 +744,18 @@ export struct SettingsPage {
 
   private async loadSettings(): Promise<void> {
     try {
-      const config: ServerConfig = await this.serverRepository().load();
-      this.serverUrl = config.serverUrl;
-      this.apiKey = config.apiKey;
+      this.serverProfiles = await this.serverRepository().loadProfiles();
+      const active: ServerProfile | undefined = await this.serverRepository().loadActiveProfile();
+      if (active !== undefined) {
+        this.selectedServerProfileIndex = this.serverProfiles.findIndex(
+          (profile: ServerProfile) => profile.id === active.id);
+        this.serverUrl = active.serverUrl;
+        this.apiKey = active.apiKey;
+      } else {
+        this.selectedServerProfileIndex = -1;
+        this.serverUrl = '';
+        this.apiKey = '';
+      }
     } catch (error) {
       this.serverMessageIsError = true;
       this.serverMessage = this.describeError(error);
@@ -700,6 +775,77 @@ export struct SettingsPage {
       this.gridColumns = settings.gridColumns;
     } catch (error) {
       // Library defaults remain available when preferences cannot be read.
+    }
+  }
+
+  private selectedServerProfileLabel(): string {
+    if (this.selectedServerProfileIndex >= 0 &&
+      this.selectedServerProfileIndex < this.serverProfiles.length) {
+      return this.serverProfiles[this.selectedServerProfileIndex].name;
+    }
+    return localized('新增服务器');
+  }
+
+  private selectServerProfile(index: number): void {
+    if (index < 0 || index >= this.serverProfiles.length) {
+      return;
+    }
+    const profile: ServerProfile = this.serverProfiles[index];
+    this.selectedServerProfileIndex = index;
+    this.serverUrl = profile.serverUrl;
+    this.apiKey = profile.apiKey;
+    this.serverMessageIsError = false;
+    this.serverMessage = localized('已选择服务器，请点击验证并保存');
+  }
+
+  private startNewServer(): void {
+    this.selectedServerProfileIndex = -1;
+    this.serverUrl = '';
+    this.apiKey = '';
+    this.serverMessageIsError = false;
+    this.serverMessage = '';
+  }
+
+  private async confirmDeleteServer(): Promise<void> {
+    if (this.selectedServerProfileIndex < 0 ||
+      this.selectedServerProfileIndex >= this.serverProfiles.length) {
+      return;
+    }
+    try {
+      const result: CacheDialogResult = await
+        (this.getUIContext().getPromptAction().showDialog({
+          title: localized('删除当前服务器'),
+          message: localized('确认删除当前服务器？'),
+          buttons: [
+            { text: localized('取消'), color: '#5D6B7A' },
+            { text: localized('删除'), color: '#C43E3E' }
+          ]
+        }) as Promise<CacheDialogResult>);
+      if (result.index !== 1) {
+        return;
+      }
+      const profile: ServerProfile = this.serverProfiles[this.selectedServerProfileIndex];
+      this.isServerBusy = true;
+      await this.serverRepository().deleteProfile(profile.id);
+      this.serverProfiles = await this.serverRepository().loadProfiles();
+      const active: ServerProfile | undefined = await this.serverRepository().loadActiveProfile();
+      if (active === undefined) {
+        this.selectedServerProfileIndex = -1;
+        this.serverUrl = '';
+        this.apiKey = '';
+      } else {
+        this.selectedServerProfileIndex = this.serverProfiles.findIndex(
+          (item: ServerProfile) => item.id === active.id);
+        this.serverUrl = active.serverUrl;
+        this.apiKey = active.apiKey;
+      }
+      this.serverMessageIsError = false;
+      this.serverMessage = localized('服务器配置已删除');
+    } catch (error) {
+      this.serverMessageIsError = true;
+      this.serverMessage = this.describeError(error);
+    } finally {
+      this.isServerBusy = false;
     }
   }
 
@@ -811,6 +957,8 @@ export struct SettingsPage {
     this.serverMessage = '';
     try {
       await this.serverRepository().clear();
+      this.serverProfiles = [];
+      this.selectedServerProfileIndex = -1;
       this.serverUrl = '';
       this.apiKey = '';
       this.serverMessageIsError = false;

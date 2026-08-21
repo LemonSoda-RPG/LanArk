@@ -55,6 +55,25 @@ export class ServerConfig {
   }
 }
 
+/** A saved LANraragi endpoint and its locally protected API key. */
+export class ServerProfile {
+  readonly id: string;
+  readonly name: string;
+  readonly serverUrl: string;
+  readonly apiKey: string;
+
+  constructor(id: string, serverUrl: string, apiKey: string = '', name: string = '') {
+    this.id = id;
+    this.serverUrl = serverUrl;
+    this.apiKey = apiKey;
+    this.name = name.length > 0 ? name : serverUrl;
+  }
+
+  toConfig(): ServerConfig {
+    return new ServerConfig(this.serverUrl, this.apiKey);
+  }
+}
+
 export interface ArchiveIndexPayload {
   arcid: string;
   extension: string;

@@ -234,7 +234,7 @@ struct Index {
   @State private sortModeIndex: number = 0;
   @State private sortAscending: boolean = false;
   @State private hideCompleted: boolean = false;
-  @State private gridLayout: boolean = false;
+  @State private gridLayout: boolean = true;
   @State private gridColumns: number = 0;
   @State private libraryContentWidth: number = 0;
   private allArchives: Array<ArchiveItem> = [];

@@ -4,7 +4,7 @@ LanArk is a native HarmonyOS NEXT LANraragi reader written in ArkTS and ArkUI. I
 
 ## Features
 
-- LANraragi server URL and API key configuration
+- Multiple LANraragi server profiles with per-server API key configuration
 - API key storage through HarmonyOS Asset Store Kit
 - Local library-index and cover caching
 - List and cover-grid layouts with automatic or fixed grid columns
@@ -135,6 +135,10 @@ If no target is listed, check the USB cable, authorization prompt, HDC installat
 2. Enter the LANraragi API key if the server requires one.
 3. Tap **Verify and save**.
 4. Tap **Refresh** in the library to fetch the current index.
+
+After saving, the endpoint appears under **Saved servers**. To switch servers, select another
+profile and tap **Verify and save**. Use **Add server** to store another endpoint. Each profile's
+API key is kept separately in HarmonyOS secure storage.
 
 The URL must be reachable from the phone or tablet. `localhost` refers to the device itself, not the computer hosting LANraragi. The API key is never written to source code or README files; it is stored in the device secure storage.
 

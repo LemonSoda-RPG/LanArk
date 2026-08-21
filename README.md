@@ -17,7 +17,7 @@ LanArk 是一个面向 HarmonyOS NEXT 的原生 ArkTS/ArkUI LANraragi 阅读器�
 
 ## 功能概览
 
-- LANraragi 服务器连接、API Key 安全保存和连接测试
+- LANraragi 多服务器配置、API Key 安全保存和连接测试
 - 档案库首页、封面缓存、网格/列表布局和自适应列数
 - 标题、标签搜索以及多种排序方式
 - 阅读进度同步，返回档案库后立即刷新当前文档进度
@@ -172,9 +172,12 @@ hdc install -r .\entry\build\default\outputs\default\entry-default-signed.hap
 - 服务器地址，例如 `http://192.168.1.10:3000`
 - LANraragi API Key
 
+验证并保存后，服务器会出现在“保存的服务器”列表中。需要切换局域网或服务器时，
+在设置页选择对应条目，再点击“验证并保存”即可连接；“新增服务器”可以添加另一套地址和 API Key。
+
 服务器地址必须是设备能够访问的地址。电脑上的 `localhost` 对手机和平板指向的是设备自身，不是电脑；请使用电脑的局域网 IP 或可解析的主机名。若使用 HTTPS，请确认设备能够验证服务器证书。
 
-API Key 不写入源码，也不会写入 README。应用使用 HarmonyOS Asset Store 保存 API Key，服务器地址和阅读设置保存在应用本地 Preferences 中。
+API Key 不写入源码，也不会写入 README。应用使用 HarmonyOS Asset Store 按服务器配置分别保存 API Key，服务器列表和当前选择保存在应用本地 Preferences 中。
 
 ## 数据、缓存和隐私
 

@@ -20,7 +20,7 @@ export class LibrarySettings {
     sortModeIndex: number = 0,
     sortAscending: boolean = false,
     hideCompleted: boolean = false,
-    gridLayout: boolean = false,
+    gridLayout: boolean = true,
     gridColumns: number = 0
   ) {
     this.sortModeIndex = Math.min(Math.max(sortModeIndex, 0), 11);
@@ -50,7 +50,7 @@ export class LibrarySettingsRepository {
       const hideCompleted: boolean =
         (await store.get(HIDE_COMPLETED_KEY, false)) as boolean;
       const gridLayout: boolean =
-        (await store.get(GRID_LAYOUT_KEY, false)) as boolean;
+        (await store.get(GRID_LAYOUT_KEY, true)) as boolean;
       const gridColumns: number =
         (await store.get(GRID_COLUMNS_KEY, 0)) as number;
       return new LibrarySettings(
