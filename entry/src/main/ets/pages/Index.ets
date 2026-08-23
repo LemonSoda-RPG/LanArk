@@ -13,6 +13,7 @@ import {
 import { ServerConfigRepository } from '../data/config/ServerConfigRepository';
 import { LanraragiApiClient } from '../data/network/LanraragiApiClient';
 import {
+  ArchiveInfoRouteParams,
   ArchiveItem,
   CategoryItem,
   ReaderRouteParams,
@@ -306,12 +307,21 @@ struct Index {
       })
     } else if (name === 'ArchiveInfo') {
       ArchiveInfoPage({
-        archive: param as ArchiveItem,
+        archive: this.archiveInfoParams(param).archive,
+        offline: this.archiveInfoParams(param).offline,
+        offlineServerUrl: this.archiveInfoParams(param).offlineServerUrl,
         onTagSelected: (tag: string): void => {
           this.openSearchForTag(tag);
         },
         onArchiveDeleted: (archiveId: string): void => {
           this.removeDeletedArchive(archiveId);
+        },
+        onLocalDownloadDeleted: (archiveId: string): void => {
+          this.pathStack.clear();
+          this.pathStack.pushPath({
+            name: 'DownloadedArchives',
+            param: new Object()
+          });
         }
       })
     } else if (name === 'Settings') {
@@ -331,6 +341,11 @@ struct Index {
     } else if (name === 'DownloadManager') {
       DownloadManagerPage()
     }
+  }
+
+  private archiveInfoParams(param: Object): ArchiveInfoRouteParams {
+    return param instanceof ArchiveInfoRouteParams ?
+      param : new ArchiveInfoRouteParams(param as ArchiveItem);
   }
 
   @Builder

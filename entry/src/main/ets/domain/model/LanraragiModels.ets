@@ -298,3 +298,20 @@ export class ReaderRouteParams {
     this.offlineServerUrl = offlineServerUrl;
   }
 }
+
+/** Parameters used when opening archive actions from an online or offline reader. */
+export class ArchiveInfoRouteParams {
+  readonly archive: ArchiveItem;
+  readonly offline: boolean;
+  readonly offlineServerUrl: string;
+
+  constructor(
+    archive: ArchiveItem,
+    offline: boolean = false,
+    offlineServerUrl: string = ''
+  ) {
+    this.archive = archive;
+    this.offline = offline;
+    this.offlineServerUrl = offlineServerUrl;
+  }
+}

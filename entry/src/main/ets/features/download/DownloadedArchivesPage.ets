@@ -4,9 +4,14 @@ import { ImageDiskCache } from '../../data/cache/ImageDiskCache';
 import { OfflineArchiveCache, OfflineArchiveRecord } from '../../data/cache/OfflineArchiveCache';
 import { LanraragiApiClient } from '../../data/network/LanraragiApiClient';
 import { ServerConfigRepository } from '../../data/config/ServerConfigRepository';
+import { DownloadManager } from '../../data/download/DownloadManager';
 import { OfflineProgressRepository } from '../../data/download/OfflineProgressRepository';
 import { ArchiveItem, ReaderRouteParams, ServerConfig } from '../../domain/model/LanraragiModels';
 import { localized } from '../../common/Localization';
+
+interface OfflineDeleteDialogResult {
+  index: number;
+}
 
 @Component
 struct DownloadedCoverView {
@@ -109,6 +114,7 @@ export struct DownloadedArchivesPage {
   @State private records: Array<OfflineArchiveRecord> = [];
   @State private serverUrl: string = '';
   @State private apiKey: string = '';
+  @State private deletingArchiveId: string = '';
 
   aboutToAppear(): void {
     this.refresh();
@@ -174,7 +180,7 @@ export struct DownloadedArchivesPage {
           List({ space: 10 }) {
             ForEach(this.records, (record: OfflineArchiveRecord) => {
               ListItem() {
-                this.archiveRow(record.archive, record.pages.length)
+                this.archiveRow(record)
               }
               .onClick(() => {
                 this.pathStack.pushPath({
@@ -205,17 +211,17 @@ export struct DownloadedArchivesPage {
   }
 
   @Builder
-  private archiveRow(archive: ArchiveItem, pageCount: number) {
+  private archiveRow(record: OfflineArchiveRecord) {
     Row({ space: 14 }) {
       DownloadedCoverView({
-        archiveId: archive.id,
-        fileExtension: archive.fileExtension,
+        archiveId: record.archive.id,
+        fileExtension: record.archive.fileExtension,
         serverUrl: this.serverUrl,
         apiKey: this.apiKey
       })
 
       Column({ space: 6 }) {
-        Text(archive.title)
+        Text(record.archive.title)
           .copyOption(CopyOptions.LocalDevice)
           .fontSize(16)
           .fontWeight(FontWeight.Medium)
@@ -223,19 +229,76 @@ export struct DownloadedArchivesPage {
           .maxLines(2)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .width('100%')
-        Text(`${pageCount} ${localized('页', 'pages')} · ${localized('可离线阅读')}`)
+        Text(`${record.pages.length} ${localized('页', 'pages')} · ${localized('可离线阅读')}`)
           .copyOption(CopyOptions.LocalDevice)
           .fontSize(13)
           .fontColor($r('app.color.text_secondary'))
           .width('100%')
       }
       .layoutWeight(1)
+
+      Button(localized('删除本地下载'))
+        .height(38)
+        .fontSize(12)
+        .fontColor($r('app.color.error'))
+        .backgroundColor($r('app.color.error_soft'))
+        .borderRadius(19)
+        .enabled(this.deletingArchiveId.length === 0)
+        .onClick(() => {
+          this.confirmDelete(record);
+        })
     }
     .width('100%')
     .padding(12)
     .backgroundColor($r('app.color.surface'))
     .borderRadius(14)
     .border({ width: 1, color: $r('app.color.divider') })
+  }
+
+  private async confirmDelete(record: OfflineArchiveRecord): Promise<void> {
+    if (this.deletingArchiveId.length > 0) {
+      return;
+    }
+    try {
+      const result: OfflineDeleteDialogResult = await
+        (this.getUIContext().getPromptAction().showDialog({
+          title: localized('确认删除本地下载？'),
+          message: localized('只会删除手机上的离线副本，不会删除服务器档案。'),
+          buttons: [
+            { text: localized('取消'), color: '#5D6B7A' },
+            { text: localized('删除'), color: '#C43E3E' }
+          ]
+        }) as Promise<OfflineDeleteDialogResult>);
+      if (result.index === 1) {
+        await this.deleteLocalArchive(record);
+      }
+    } catch (error) {
+      // Closing the dialog must not affect the offline library.
+    }
+  }
+
+  private async deleteLocalArchive(record: OfflineArchiveRecord): Promise<void> {
+    this.deletingArchiveId = record.archive.id;
+    try {
+      const context: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext;
+      // This path is deliberately local-only: no API client and no server call.
+      new OfflineArchiveCache(context, this.serverUrl).clearArchive(record.archive.id);
+      DownloadManager.forget(record.archive.id);
+      await new OfflineProgressRepository(context).clear(record.archive.id);
+      this.records = this.records.filter((item: OfflineArchiveRecord) => {
+        return item.archive.id !== record.archive.id;
+      });
+      try {
+        this.getUIContext().getPromptAction().showToast({
+          message: localized('本地下载已删除')
+        });
+      } catch (error) {
+        // The local deletion already completed if the toast is unavailable.
+      }
+    } finally {
+      this.deletingArchiveId = '';
+    }
   }
 
   private async refresh(): Promise<void> {

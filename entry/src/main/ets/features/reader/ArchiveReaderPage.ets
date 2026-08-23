@@ -12,6 +12,7 @@ import { ServerConfigRepository } from '../../data/config/ServerConfigRepository
 import { LanraragiApiClient } from '../../data/network/LanraragiApiClient';
 import {
   ArchiveIndexPayload,
+  ArchiveInfoRouteParams,
   ArchiveItem,
   ReaderPage,
   ReaderRouteParams,
@@ -1225,7 +1226,11 @@ export struct ArchiveReaderPage {
     }
     this.pathStack.pushPath({
       name: 'ArchiveInfo',
-      param: this.params.archive
+      param: new ArchiveInfoRouteParams(
+        this.params.archive,
+        this.params.offline,
+        this.params.offlineServerUrl
+      )
     });
   }
 

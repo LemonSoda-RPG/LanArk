@@ -203,6 +203,14 @@ const TRANSLATIONS: Record<string, string> = {
   , '离线档案页面列表为空': 'The offline archive returned no pages'
   , '离线页面不存在，请重新下载档案': 'This offline page is missing. Download the archive again.'
   , '没有已下载档案': 'No downloaded archives'
+  , '删除本地下载': 'Delete local download'
+  , '确认删除本地下载？': 'Delete this local download?'
+  , '只会删除手机上的离线副本，不会删除服务器档案。':
+    'Only the offline copy on this device will be deleted. The server archive will not be touched.'
+  , '本地下载已删除': 'Local download deleted'
+  , '本地下载管理': 'Local download management'
+  , '这里只删除本地离线副本，不会删除服务器档案。':
+    'Only the local offline copy is managed here. The server archive will not be touched.'
   , '可离线阅读': 'available offline'
   , '在档案信息中点击下载，即可在无网络时阅读。':
     'Tap Download in archive information to read without a network connection.'

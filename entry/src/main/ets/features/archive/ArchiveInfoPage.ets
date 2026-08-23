@@ -32,8 +32,11 @@ interface DeleteDialogResult {
 export struct ArchiveInfoPage {
   @Consume('pathStack') private pathStack: NavPathStack = new NavPathStack();
   archive: ArchiveItem = emptyArchive();
+  offline: boolean = false;
+  offlineServerUrl: string = '';
   onTagSelected: (tag: string) => void = (tag: string): void => {};
   onArchiveDeleted: (archiveId: string) => void = (archiveId: string): void => {};
+  onLocalDownloadDeleted: (archiveId: string) => void = (archiveId: string): void => {};
   @State private isDeleting: boolean = false;
   @State private deleteError: string = '';
   @State private downloadTask: DownloadTask | undefined = undefined;
@@ -274,13 +277,16 @@ export struct ArchiveInfoPage {
   @Builder
   private dangerSection() {
     Column({ space: 12 }) {
-      Text(localized('危险操作'))
+      Text(this.isDownloaded || this.offline ? localized('本地下载管理') : localized('危险操作'))
         .copyOption(CopyOptions.LocalDevice)
         .fontSize(17)
         .fontWeight(FontWeight.Bold)
-        .fontColor($r('app.color.error'))
+        .fontColor(this.isDownloaded || this.offline ?
+          $r('app.color.text_primary') : $r('app.color.error'))
         .width('100%')
-      Text(localized('删除会同时移除服务器中的档案文件和元数据，此操作无法撤销。'))
+      Text(this.isDownloaded || this.offline ?
+        localized('这里只删除本地离线副本，不会删除服务器档案。') :
+        localized('删除会同时移除服务器中的档案文件和元数据，此操作无法撤销。'))
         .copyOption(CopyOptions.LocalDevice)
         .fontSize(13)
         .lineHeight(19)
@@ -298,7 +304,8 @@ export struct ArchiveInfoPage {
           .borderRadius(10)
       }
 
-      Button(this.isDeleting ? localized('正在删除…') : localized('删除当前档案'))
+      Button(this.isDeleting ? localized('正在删除…') :
+        (this.isDownloaded || this.offline ? localized('删除本地下载') : localized('删除当前档案')))
         .width('100%')
         .height(48)
         .enabled(!this.isDeleting)
@@ -323,12 +330,19 @@ export struct ArchiveInfoPage {
     }
     this.deleteError = '';
     try {
+      // Re-check local storage immediately before showing the destructive action.
+      // This prevents a downloaded archive from falling through to server deletion
+      // while the periodic download-state refresh is still running.
+      await this.refreshDownloadState();
       const result: DeleteDialogResult = await
         (this.getUIContext().getPromptAction().showDialog({
-        title: localized('确认删除当前档案？'),
-        message: isEnglishSystemLanguage() ?
-          `“${this.archive.title}” will be permanently deleted from the server. Files and metadata cannot be recovered.` :
-          `“${this.archive.title}”将从服务器永久删除，文件和元数据均无法恢复。`,
+        title: this.isDownloaded || this.offline ?
+          localized('确认删除本地下载？') : localized('确认删除当前档案？'),
+        message: this.isDownloaded || this.offline ?
+          localized('只会删除手机上的离线副本，不会删除服务器档案。') :
+          (isEnglishSystemLanguage() ?
+            `“${this.archive.title}” will be permanently deleted from the server. Files and metadata cannot be recovered.` :
+            `“${this.archive.title}”将从服务器永久删除，文件和元数据均无法恢复。`),
         buttons: [
           { text: localized('取消'), color: '#5D6B7A' },
           { text: localized('删除'), color: '#C43E3E' }
@@ -349,7 +363,25 @@ export struct ArchiveInfoPage {
     try {
       const context: common.UIAbilityContext =
         this.getUIContext().getHostContext() as common.UIAbilityContext;
+      if (this.offline && this.offlineServerUrl.length > 0) {
+        new OfflineArchiveCache(context, this.offlineServerUrl).clearArchive(this.archive.id);
+        DownloadManager.forget(this.archive.id);
+        await new OfflineProgressRepository(context).clear(this.archive.id);
+        this.isDownloaded = false;
+        this.onLocalDownloadDeleted(this.archive.id);
+        return;
+      }
       const config: ServerConfig = await this.repository().load();
+      if (this.isDownloaded || this.offline) {
+        const storageServerUrl: string = this.offlineServerUrl.length > 0 ?
+          this.offlineServerUrl : config.serverUrl;
+        new OfflineArchiveCache(context, storageServerUrl).clearArchive(this.archive.id);
+        DownloadManager.forget(this.archive.id);
+        await new OfflineProgressRepository(context).clear(this.archive.id);
+        this.isDownloaded = false;
+        this.onLocalDownloadDeleted(this.archive.id);
+        return;
+      }
       const client: LanraragiApiClient =
         new LanraragiApiClient(config.serverUrl, config.apiKey);
       await client.deleteArchive(this.archive.id);
@@ -399,8 +431,10 @@ export struct ArchiveInfoPage {
       const task: DownloadTask | undefined = DownloadManager.taskFor(this.archive.id);
       this.downloadTask = task;
       const config: ServerConfig = await this.repository().load();
-      if (config.serverUrl.length > 0) {
-        this.isDownloaded = new OfflineArchiveCache(context, config.serverUrl)
+      const storageServerUrl: string = this.offlineServerUrl.length > 0 ?
+        this.offlineServerUrl : config.serverUrl;
+      if (storageServerUrl.length > 0) {
+        this.isDownloaded = new OfflineArchiveCache(context, storageServerUrl)
           .isDownloaded(this.archive.id);
       }
     } catch (error) {
