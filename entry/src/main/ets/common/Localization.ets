@@ -265,6 +265,23 @@ const TRANSLATIONS: Record<string, string> = {
   , '正在刷新档案库': 'Refreshing the library'
   , '无法刷新档案库，正在显示本地缓存':
     'Could not refresh the library. Showing the local copy.'
+  , '版本更新': 'App update'
+  , '从 GitHub 获取最新发布': 'Reads the newest release from GitHub'
+  , '当前版本': 'Current version'
+  , '最新版本': 'Latest version'
+  , '检查更新': 'Check for updates'
+  , '检查中…': 'Checking…'
+  , '发现新版本': 'New version available:'
+  , '已是最新版本': 'You are on the latest version'
+  , '前往下载': 'Open the download page'
+  , '未知': 'unknown'
+  , '版本服务返回的内容无法识别': 'The release service response could not be read'
+  , '版本服务返回错误': 'The release service returned an error'
+  , '请求过于频繁，请稍后再试': 'Too many requests. Try again later.'
+  , '还没有发布任何版本': 'No release has been published yet'
+  , '检查更新失败': 'Could not check for updates'
+  , '无法连接版本服务，请检查网络': 'Could not reach the release service. Check your network.'
+  , '无法打开浏览器，请手动访问': 'Could not open a browser. Visit this address manually:'
 };
 
 export function localized(chinese: string, english?: string): string {

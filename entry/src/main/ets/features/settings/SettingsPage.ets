@@ -1,4 +1,5 @@
-import { common } from '@kit.AbilityKit';
+import { common, Want } from '@kit.AbilityKit';
+import { BusinessError } from '@kit.BasicServicesKit';
 import {
   ImageCacheStats,
   ImageDiskCache
@@ -13,6 +14,12 @@ import {
 } from '../../data/config/ReaderSettingsRepository';
 import { ServerConfigRepository } from '../../data/config/ServerConfigRepository';
 import { LanraragiApiClient } from '../../data/network/LanraragiApiClient';
+import {
+  fetchLatestRelease,
+  installedVersion,
+  isNewerVersion,
+  ReleaseInfo
+} from '../../data/update/UpdateChecker';
 import { ServerConfig, ServerProfile } from '../../domain/model/LanraragiModels';
 import { describeUserFacingError, localized } from '../../common/Localization';
 
@@ -59,8 +66,15 @@ export struct SettingsPage {
   @State private isCacheBusy: boolean = false;
   @State private cacheMessage: string = '';
   @State private cacheMessageIsError: boolean = false;
+  @State private currentVersion: string = '';
+  @State private isCheckingUpdate: boolean = false;
+  @State private updateMessage: string = '';
+  @State private updateMessageIsError: boolean = false;
+  // Set only when a newer release exists; drives the download button.
+  @State private availableRelease: ReleaseInfo | undefined = undefined;
 
   aboutToAppear(): void {
+    this.currentVersion = installedVersion();
     this.loadSettings();
     this.refreshCacheStats().catch(() => {});
   }
@@ -74,6 +88,7 @@ export struct SettingsPage {
           this.librarySection()
           this.cacheSection()
           this.readerSection()
+          this.updateSection()
           Text(localized('服务器配置仅保存在本机；阅读时只同步进度，不会删除服务器中的任何档案。'))
             .copyOption(CopyOptions.LocalDevice)
             .fontSize(12)
@@ -676,6 +691,148 @@ export struct SettingsPage {
     .backgroundColor($r('app.color.surface'))
     .border({ width: 1, color: $r('app.color.divider') })
     .borderRadius(18)
+  }
+
+  @Builder
+  private updateSection() {
+    Column({ space: 14 }) {
+      this.sectionTitle(localized('版本更新'), localized('从 GitHub 获取最新发布'))
+
+      Row({ space: 12 }) {
+        Column({ space: 4 }) {
+          Text(`${localized('当前版本')} ${this.currentVersion.length > 0 ?
+            this.currentVersion : localized('未知')}`)
+            .copyOption(CopyOptions.LocalDevice)
+            .fontSize(16)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_primary'))
+            .width('100%')
+          if (this.availableRelease !== undefined) {
+            Text(`${localized('最新版本')} ${this.availableRelease.version}`)
+              .copyOption(CopyOptions.LocalDevice)
+              .fontSize(12)
+              .fontColor($r('app.color.accent_text'))
+              .width('100%')
+          }
+        }
+        .layoutWeight(1)
+
+        Button(this.isCheckingUpdate ? localized('检查中…') : localized('检查更新'))
+          .height(44)
+          .fontSize(14)
+          .fontColor($r('app.color.accent_text'))
+          .backgroundColor($r('app.color.accent_soft'))
+          .enabled(!this.isCheckingUpdate)
+          .onClick(() => {
+            this.checkForUpdate();
+          })
+      }
+      .width('100%')
+
+      if (this.updateMessage.length > 0) {
+        Text(this.updateMessage)
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(12)
+          .fontColor(this.updateMessageIsError ?
+            $r('app.color.error') : $r('app.color.success'))
+          .width('100%')
+      }
+
+      if (this.availableRelease !== undefined && this.availableRelease.notes.length > 0) {
+        Text(this.availableRelease.notes)
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(12)
+          .lineHeight(18)
+          .fontColor($r('app.color.text_tertiary'))
+          .maxLines(12)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+          .padding(10)
+          .backgroundColor($r('app.color.surface_muted'))
+          .borderRadius(10)
+      }
+
+      if (this.availableRelease !== undefined && this.availableRelease.pageUrl.length > 0) {
+        Button(localized('前往下载'))
+          .height(44)
+          .fontSize(14)
+          .fontColor(Color.White)
+          .backgroundColor($r('app.color.accent'))
+          .width('100%')
+          .onClick(() => {
+            this.openReleasePage();
+          })
+      }
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor($r('app.color.surface'))
+    .border({ width: 1, color: $r('app.color.divider') })
+    .borderRadius(18)
+  }
+
+  /** Reads the newest published release and compares it with this build. */
+  private async checkForUpdate(): Promise<void> {
+    if (this.isCheckingUpdate) {
+      return;
+    }
+    this.isCheckingUpdate = true;
+    this.updateMessage = '';
+    this.updateMessageIsError = false;
+    this.availableRelease = undefined;
+    try {
+      const release: ReleaseInfo = await fetchLatestRelease();
+      if (this.currentVersion.length === 0) {
+        this.currentVersion = installedVersion();
+      }
+      if (release.version.length === 0) {
+        this.updateMessage = localized('还没有发布任何版本');
+      } else if (isNewerVersion(release.version, this.currentVersion)) {
+        this.availableRelease = release;
+        this.updateMessage = `${localized('发现新版本')} ${release.version}`;
+      } else {
+        this.updateMessage = localized('已是最新版本');
+      }
+    } catch (error) {
+      this.updateMessageIsError = true;
+      this.updateMessage = this.describeUpdateError(error);
+    } finally {
+      this.isCheckingUpdate = false;
+    }
+  }
+
+  /**
+   * The shared mapper talks about a server address and port, which the version
+   * check does not have; connectivity failures get their own wording here.
+   */
+  private describeUpdateError(error: Object): string {
+    const code: number = (error as BusinessError).code;
+    if (code === 2300006 || code === 2300007) {
+      return localized('无法连接版本服务，请检查网络');
+    }
+    return this.describeError(error);
+  }
+
+  /** Hands the release page to the browser; the app never downloads on its own. */
+  private async openReleasePage(): Promise<void> {
+    const release: ReleaseInfo | undefined = this.availableRelease;
+    if (release === undefined || release.pageUrl.length === 0) {
+      return;
+    }
+    try {
+      const context: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const want: Want = {
+        action: 'ohos.want.action.viewData',
+        entities: ['entity.system.browsable'],
+        uri: release.pageUrl
+      };
+      await context.startAbility(want);
+    } catch (error) {
+      this.updateMessageIsError = true;
+      this.updateMessage =
+        `${localized('无法打开浏览器，请手动访问')} ${release.pageUrl}`;
+    }
   }
 
   @Builder
