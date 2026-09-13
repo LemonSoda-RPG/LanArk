@@ -8,7 +8,7 @@ import {
   ReaderPage,
   ServerConfig
 } from '../../domain/model/LanraragiModels';
-import { localized } from '../../common/Localization';
+import { describeUserFacingError, localized } from '../../common/Localization';
 
 export type DownloadTaskStatus = 'queued' | 'downloading' | 'completed' | 'failed';
 
@@ -20,6 +20,10 @@ export class DownloadTask {
   status: DownloadTaskStatus;
   errorMessage: string;
   updatedAt: number;
+  // Set by `forget`, so the worker stops before it writes more files.
+  cancelled: boolean = false;
+  // Resolves when the worker has finished, so a delete can wait for it.
+  settled: Promise<void> | undefined = undefined;
 
   constructor(
     archiveId: string,
@@ -62,6 +66,48 @@ export class DownloadTask {
 /** In-process queue used by the archive info and download management pages. */
 export class DownloadManager {
   private static tasks: Array<DownloadTask> = [];
+  // Pages used to poll every 500 ms, which meant a keystore query, a manifest
+  // parse and one stat per page file twice a second. They subscribe instead.
+  private static listeners: Array<() => void> = [];
+
+  static addChangeListener(listener: () => void): void {
+    if (DownloadManager.listeners.indexOf(listener) < 0) {
+      DownloadManager.listeners.push(listener);
+    }
+  }
+
+  static removeChangeListener(listener: () => void): void {
+    const index: number = DownloadManager.listeners.indexOf(listener);
+    if (index >= 0) {
+      DownloadManager.listeners.splice(index, 1);
+    }
+  }
+
+  private static notifyChanged(): void {
+    DownloadManager.listeners.forEach((listener: () => void) => {
+      try {
+        listener();
+      } catch (error) {
+        // An observer must never break the download it is watching.
+      }
+    });
+  }
+
+  /** True when both snapshots describe the same tasks with the same progress. */
+  static sameTasks(left: Array<DownloadTask>, right: Array<DownloadTask>): boolean {
+    if (left.length !== right.length) {
+      return false;
+    }
+    for (let index: number = 0; index < left.length; index += 1) {
+      const a: DownloadTask = left[index];
+      const b: DownloadTask = right[index];
+      if (a.archiveId !== b.archiveId || a.status !== b.status ||
+        a.completedPages !== b.completedPages) {
+        return false;
+      }
+    }
+    return true;
+  }
 
   static snapshot(): Array<DownloadTask> {
     return DownloadManager.tasks.map((task: DownloadTask) => task.copy());
@@ -96,20 +142,41 @@ export class DownloadManager {
     if (existing === undefined) {
       DownloadManager.tasks.push(task);
     }
-    DownloadManager.run(context, config, archive, task).catch((error: Object) => {
-      DownloadManager.fail(task, error);
-    });
+    // The promise is kept on the task so `forget` can wait for the worker to
+    // stop before the caller deletes the files it is still writing.
+    task.settled = DownloadManager.run(context, config, archive, task)
+      .catch((error: Object) => {
+        DownloadManager.fail(task, error);
+      });
+    DownloadManager.notifyChanged();
   }
 
-  static removeFinished(archiveId: string): void {
-    DownloadManager.tasks = DownloadManager.tasks.filter((task: DownloadTask) => {
-      return task.archiveId !== archiveId ||
-        (task.status !== 'completed' && task.status !== 'failed');
+  static async forget(archiveId: string): Promise<void> {
+    const task: DownloadTask | undefined = DownloadManager.tasks.find((item: DownloadTask) => {
+      return item.archiveId === archiveId;
     });
+    if (task !== undefined) {
+      task.cancelled = true;
+      if (task.settled !== undefined) {
+        try {
+          await task.settled;
+        } catch (error) {
+          // A failed worker is already reported through the task status.
+        }
+      }
+    }
+    DownloadManager.tasks = DownloadManager.tasks.filter((item: DownloadTask) => {
+      return item.archiveId !== archiveId;
+    });
+    DownloadManager.notifyChanged();
   }
 
-  static forget(archiveId: string): void {
-    DownloadManager.tasks = DownloadManager.tasks.filter((task: DownloadTask) => task.archiveId !== archiveId);
+  /** True while a download for this archive is queued or running. */
+  static isActive(archiveId: string): boolean {
+    const task: DownloadTask | undefined = DownloadManager.tasks.find((item: DownloadTask) => {
+      return item.archiveId === archiveId;
+    });
+    return task !== undefined && (task.status === 'queued' || task.status === 'downloading');
   }
 
   private static async run(
@@ -135,6 +202,11 @@ export class DownloadManager {
     task.totalPages = pages.length;
     task.completedPages = cache.countDownloadedPages(archive.id, pages);
     for (let index = 0; index < pages.length; index += 1) {
+      if (task.cancelled) {
+        // Removed while running. Stop before the manifest is committed, so the
+        // archive cannot reappear after the caller deleted its files.
+        return;
+      }
       const page: ReaderPage = pages[index];
       if (cache.readPage(archive.id, page.pageNumber) === undefined) {
         const data: ArrayBuffer | undefined = await client.fetchArchivePage(page, archive.id);
@@ -145,6 +217,7 @@ export class DownloadManager {
       }
       task.completedPages = index + 1;
       task.updatedAt = Date.now();
+      DownloadManager.notifyChanged();
     }
     // The manifest is committed last, so an interrupted download never appears
     // as a usable offline archive.
@@ -153,6 +226,7 @@ export class DownloadManager {
     task.status = 'completed';
     task.errorMessage = '';
     task.updatedAt = Date.now();
+    DownloadManager.notifyChanged();
   }
 
   private static async cacheCover(
@@ -194,8 +268,8 @@ export class DownloadManager {
 
   private static fail(task: DownloadTask, error: Object): void {
     task.status = 'failed';
-    task.errorMessage = error instanceof Error && error.message.length > 0 ?
-      error.message : localized('下载档案失败');
+    task.errorMessage = describeUserFacingError(error, localized('下载档案失败'));
     task.updatedAt = Date.now();
+    DownloadManager.notifyChanged();
   }
 }

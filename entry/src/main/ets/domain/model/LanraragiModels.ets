@@ -82,6 +82,7 @@ export interface ArchiveIndexPayload {
   title: string;
   pagecount: number;
   progress: number;
+  lastreadtime?: number;
   archive_count?: number;
 }
 
@@ -94,8 +95,19 @@ export class ArchiveItem {
   readonly title: string;
   readonly pageCount: number;
   progress: number;
+  // Epoch seconds of the last read, as reported by the server (the library index
+  // already carries `lastreadtime`). Bumped locally while reading so the history
+  // stays fresh until the next full index refresh.
+  lastReadTime: number;
   readonly archiveCount: number;
   readonly dateAdded: number;
+  // `tags` never changes after construction, so the parsed forms are built once.
+  // Sorting by a tag and rendering `displayTags` used to re-split the tag string
+  // on every comparison and on every row render.
+  private tagIndexCache: Map<string, string> | undefined = undefined;
+  private tagItemsCache: Array<string> | undefined = undefined;
+  private displayTagsCache: string | undefined = undefined;
+  private searchKeyCache: string | undefined = undefined;
 
   constructor(payload: ArchiveIndexPayload) {
     this.id = payload.arcid;
@@ -106,6 +118,7 @@ export class ArchiveItem {
     this.title = payload.title;
     this.pageCount = payload.pagecount;
     this.progress = payload.progress;
+    this.lastReadTime = payload.lastreadtime ?? 0;
     this.archiveCount = payload.archive_count ?? 0;
     this.dateAdded = this.extractNumericTag('date_added');
   }
@@ -142,31 +155,58 @@ export class ArchiveItem {
   }
 
   get displayTags(): string {
-    const visible: Array<string> = this.tagItems()
-      .filter((tag: string) => !tag.toLowerCase().startsWith('date_added:'))
-      .slice(0, 3);
-    return visible.join(' · ');
+    if (this.displayTagsCache === undefined) {
+      this.displayTagsCache = this.tagItems()
+        .filter((tag: string) => !tag.toLowerCase().startsWith('date_added:'))
+        .slice(0, 3)
+        .join(' · ');
+    }
+    return this.displayTagsCache;
   }
 
+  /** Parsed tags. The returned array is shared; callers must not mutate it. */
   tagItems(): Array<string> {
-    if (this.tags.length === 0) {
-      return [];
+    if (this.tagItemsCache === undefined) {
+      this.tagItemsCache = this.tags.length === 0 ? [] :
+        this.tags.split(',')
+          .map((tag: string) => tag.trim())
+          .filter((tag: string) => tag.length > 0);
     }
-    return this.tags.split(',')
-      .map((tag: string) => tag.trim())
-      .filter((tag: string) => tag.length > 0);
+    return this.tagItemsCache;
+  }
+
+  /** Namespace to value map, so a lookup never re-splits the tag string. */
+  private tagIndex(): Map<string, string> {
+    if (this.tagIndexCache === undefined) {
+      const index: Map<string, string> = new Map<string, string>();
+      const parts: Array<string> = this.tagItems();
+      for (let position: number = 0; position < parts.length; position++) {
+        const tag: string = parts[position];
+        const separator: number = tag.indexOf(':');
+        if (separator <= 0) {
+          continue;
+        }
+        const namespace: string = tag.substring(0, separator).trim().toLowerCase();
+        if (!index.has(namespace)) {
+          index.set(namespace, tag.substring(separator + 1).trim());
+        }
+      }
+      this.tagIndexCache = index;
+    }
+    return this.tagIndexCache;
   }
 
   tagValue(namespace: string): string {
-    const prefix: string = `${namespace.toLowerCase()}:`;
-    const parts: Array<string> = this.tags.split(',');
-    for (let index: number = 0; index < parts.length; index++) {
-      const tag: string = parts[index].trim();
-      if (tag.toLowerCase().startsWith(prefix)) {
-        return tag.substring(prefix.length).trim();
-      }
+    const value: string | undefined = this.tagIndex().get(namespace.toLowerCase());
+    return value === undefined ? '' : value;
+  }
+
+  /** Lower-cased title and tags, built once for library search. */
+  searchKey(): string {
+    if (this.searchKeyCache === undefined) {
+      this.searchKeyCache = `${this.title}\n${this.tags}`.toLowerCase();
     }
-    return '';
+    return this.searchKeyCache;
   }
 
   private extractNumericTag(namespace: string): number {
@@ -197,8 +237,16 @@ export class ArchiveItem {
       title: this.title,
       pagecount: this.pageCount,
       progress: this.progress,
+      lastreadtime: this.lastReadTime,
       archive_count: this.archiveCount
     };
+  }
+
+  /** Records that the archive was just read, for the history ordering. */
+  markReadAt(timestampSeconds: number): void {
+    if (timestampSeconds > this.lastReadTime) {
+      this.lastReadTime = timestampSeconds;
+    }
   }
 
   withProgress(progress: number): ArchiveItem {

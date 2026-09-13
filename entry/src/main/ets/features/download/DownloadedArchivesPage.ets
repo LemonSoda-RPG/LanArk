@@ -21,14 +21,23 @@ struct DownloadedCoverView {
   apiKey: string = '';
   @State private cover: image.PixelMap | undefined = undefined;
   @State private isLoading: boolean = false;
+  // Set when the component is destroyed; a decode still awaiting at that point
+  // would otherwise assign `cover` after the only release ran.
+  private destroyed: boolean = false;
 
   aboutToAppear(): void {
     this.loadCover();
   }
 
   aboutToBeDeleted(): void {
+    this.destroyed = true;
+    this.releaseCover();
+  }
+
+  private releaseCover(): void {
     if (this.cover !== undefined) {
-      this.cover.release();
+      this.cover.release().catch(() => {});
+      this.cover = undefined;
     }
   }
 
@@ -91,11 +100,17 @@ struct DownloadedCoverView {
           targetWidth = Math.max(Math.round(targetWidth * 720 / targetHeight), 1);
           targetHeight = 720;
         }
-        this.cover = await source.createPixelMap({
+        const decoded: image.PixelMap = await source.createPixelMap({
           desiredSize: { width: targetWidth, height: targetHeight }
         });
-        if (shouldCache && this.cover !== undefined) {
-          await cache.writeCover(this.archiveId, this.cover);
+        if (this.destroyed) {
+          // aboutToBeDeleted already ran, so releasing here is the last chance.
+          decoded.release().catch(() => {});
+          return;
+        }
+        this.cover = decoded;
+        if (shouldCache) {
+          await cache.writeCover(this.archiveId, decoded);
         }
       } finally {
         await source.release();
@@ -108,10 +123,44 @@ struct DownloadedCoverView {
   }
 }
 
+class OfflineRecordDataSource implements IDataSource {
+  private records: Array<OfflineArchiveRecord> = [];
+  private listeners: Array<DataChangeListener> = [];
+
+  totalCount(): number {
+    return this.records.length;
+  }
+
+  getData(index: number): OfflineArchiveRecord {
+    return this.records[index];
+  }
+
+  registerDataChangeListener(listener: DataChangeListener): void {
+    if (this.listeners.indexOf(listener) < 0) {
+      this.listeners.push(listener);
+    }
+  }
+
+  unregisterDataChangeListener(listener: DataChangeListener): void {
+    const index: number = this.listeners.indexOf(listener);
+    if (index >= 0) {
+      this.listeners.splice(index, 1);
+    }
+  }
+
+  replace(records: Array<OfflineArchiveRecord>): void {
+    this.records = records;
+    this.listeners.forEach((listener: DataChangeListener) => {
+      listener.onDataReloaded();
+    });
+  }
+}
+
 @Component
 export struct DownloadedArchivesPage {
   @Consume('pathStack') private pathStack: NavPathStack = new NavPathStack();
   @State private records: Array<OfflineArchiveRecord> = [];
+  private recordDataSource: OfflineRecordDataSource = new OfflineRecordDataSource();
   @State private serverUrl: string = '';
   @State private apiKey: string = '';
   @State private deletingArchiveId: string = '';
@@ -178,7 +227,9 @@ export struct DownloadedArchivesPage {
           .padding(24)
         } else {
           List({ space: 10 }) {
-            ForEach(this.records, (record: OfflineArchiveRecord) => {
+            // Only visible rows are built. Each row decodes a cover, so ForEach
+            // used to decode every offline archive before the first frame.
+            LazyForEach(this.recordDataSource, (record: OfflineArchiveRecord) => {
               ListItem() {
                 this.archiveRow(record)
               }
@@ -195,6 +246,7 @@ export struct DownloadedArchivesPage {
               })
             }, (record: OfflineArchiveRecord) => `offline-${record.archive.id}`)
           }
+          .cachedCount(6)
           .width('100%')
           .layoutWeight(1)
           .scrollBar(BarState.Auto)
@@ -265,8 +317,8 @@ export struct DownloadedArchivesPage {
           title: localized('确认删除本地下载？'),
           message: localized('只会删除手机上的离线副本，不会删除服务器档案。'),
           buttons: [
-            { text: localized('取消'), color: '#5D6B7A' },
-            { text: localized('删除'), color: '#C43E3E' }
+            { text: localized('取消'), color: $r('app.color.text_secondary') },
+            { text: localized('删除'), color: $r('app.color.error') }
           ]
         }) as Promise<OfflineDeleteDialogResult>);
       if (result.index === 1) {
@@ -284,11 +336,12 @@ export struct DownloadedArchivesPage {
         this.getUIContext().getHostContext() as common.UIAbilityContext;
       // This path is deliberately local-only: no API client and no server call.
       new OfflineArchiveCache(context, this.serverUrl).clearArchive(record.archive.id);
-      DownloadManager.forget(record.archive.id);
+      await DownloadManager.forget(record.archive.id);
       await new OfflineProgressRepository(context).clear(record.archive.id);
       this.records = this.records.filter((item: OfflineArchiveRecord) => {
         return item.archive.id !== record.archive.id;
       });
+      this.recordDataSource.replace(this.records);
       try {
         this.getUIContext().getPromptAction().showToast({
           message: localized('本地下载已删除')
@@ -312,15 +365,23 @@ export struct DownloadedArchivesPage {
         new OfflineArchiveCache(context, config.serverUrl).listRecords();
       const progressRepository: OfflineProgressRepository =
         new OfflineProgressRepository(context);
+      // The lookups are independent, so they run together instead of one after
+      // another; each one opens the preferences store.
+      const progressValues: Array<number> = await Promise.all(
+        records.map((record: OfflineArchiveRecord) => {
+          return progressRepository.load(record.archive.id);
+        })
+      );
       for (let index = 0; index < records.length; index += 1) {
-        const progress: number = await progressRepository.load(records[index].archive.id);
-        if (progress > 0) {
-          records[index].archive.setProgress(progress);
+        if (progressValues[index] > 0) {
+          records[index].archive.setProgress(progressValues[index]);
         }
       }
       this.records = records;
+      this.recordDataSource.replace(records);
     } catch (error) {
       this.records = [];
+      this.recordDataSource.replace([]);
     }
   }
 }

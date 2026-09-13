@@ -1,6 +1,5 @@
 import { common } from '@kit.AbilityKit';
 import { window } from '@kit.ArkUI';
-import { image } from '@kit.ImageKit';
 import { ImageDiskCache } from '../data/cache/ImageDiskCache';
 import {
   CachedLibraryIndex,
@@ -19,13 +18,18 @@ import {
   ReaderRouteParams,
   ServerConfig
 } from '../domain/model/LanraragiModels';
-import { ArchiveDetailPage } from '../features/archive/ArchiveDetailPage';
-import { ArchiveInfoPage } from '../features/archive/ArchiveInfoPage';
 import { ArchiveReaderPage } from '../features/reader/ArchiveReaderPage';
+import { ArchiveInfoPage } from '../features/archive/ArchiveInfoPage';
 import { SettingsPage } from '../features/settings/SettingsPage';
 import { DownloadedArchivesPage } from '../features/download/DownloadedArchivesPage';
 import { DownloadManagerPage } from '../features/download/DownloadManagerPage';
-import { localized } from '../common/Localization';
+import { HistoryPage } from '../features/history/HistoryPage';
+import { LibraryProgressOverlayRepository } from '../data/cache/LibraryProgressOverlayRepository';
+import { ArchiveCoverView } from '../features/library/ArchiveCoverView';
+import { describeUserFacingError, localized } from '../common/Localization';
+
+/** Index of the "Random" entry in `sortModeLabels()`. */
+const RANDOM_SORT_INDEX: number = 12;
 
 class ArchiveDataSource implements IDataSource {
   private items: Array<ArchiveItem> = [];
@@ -112,107 +116,6 @@ struct ArchiveNewBadge {
   }
 }
 
-@Component
-export struct ArchiveCoverView {
-  archiveId: string = '';
-  fileExtension: string = '';
-  serverUrl: string = '';
-  apiKey: string = '';
-  coverWidth: number | string = 68;
-  coverHeight: number | string = 92;
-  @State private cover: image.PixelMap | undefined = undefined;
-  @State private isLoading: boolean = false;
-
-  aboutToAppear(): void {
-    this.loadCover();
-  }
-
-  aboutToBeDeleted(): void {
-    if (this.cover !== undefined) {
-      this.cover.release();
-    }
-  }
-
-  build() {
-    Stack({ alignContent: Alignment.Center }) {
-      if (this.cover !== undefined) {
-        Image(this.cover as image.PixelMap)
-          .width('100%')
-          .height('100%')
-          .objectFit(ImageFit.Cover)
-      } else {
-        Text(this.fileExtension.toUpperCase())
-          .copyOption(CopyOptions.LocalDevice)
-          .fontSize(11)
-          .fontWeight(FontWeight.Bold)
-          .fontColor($r('app.color.extension_text'))
-          .hitTestBehavior(HitTestMode.None)
-        if (this.isLoading) {
-          LoadingProgress()
-            .width(22)
-            .height(22)
-            .margin({ top: 48 })
-        }
-      }
-    }
-    .width(this.coverWidth)
-    .height(this.coverHeight)
-    .backgroundColor($r('app.color.surface_muted'))
-    .borderRadius(10)
-    .clip(true)
-  }
-
-  private async loadCover(): Promise<void> {
-    if (this.isLoading || this.archiveId.length === 0 || this.serverUrl.length === 0) {
-      return;
-    }
-    this.isLoading = true;
-    try {
-      const context: common.UIAbilityContext =
-        this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const cache: ImageDiskCache = new ImageDiskCache(context, this.serverUrl);
-      let buffer: ArrayBuffer | undefined = cache.readCover(this.archiveId);
-      let shouldCache: boolean = false;
-      const client: LanraragiApiClient =
-        new LanraragiApiClient(this.serverUrl, this.apiKey);
-      if (buffer === undefined) {
-        buffer = await client.fetchArchiveThumbnail(this.archiveId);
-        shouldCache = buffer !== undefined;
-      }
-      if (buffer === undefined) {
-        return;
-      }
-      const source: image.ImageSource = image.createImageSource(buffer);
-      try {
-        if (shouldCache) {
-          const info: image.ImageInfo = await source.getImageInfo();
-          let targetWidth: number = Math.min(info.size.width, 480);
-          let targetHeight: number = info.size.width > 0 ?
-            Math.max(Math.round(info.size.height * targetWidth / info.size.width), 1) : 720;
-          if (targetHeight > 720) {
-            targetWidth = Math.max(Math.round(targetWidth * 720 / targetHeight), 1);
-            targetHeight = 720;
-          }
-          this.cover = await source.createPixelMap({
-            desiredSize: { width: Math.max(targetWidth, 1), height: targetHeight }
-          });
-        } else {
-          this.cover = await source.createPixelMap();
-        }
-        if (shouldCache) {
-          await cache.writeCover(this.archiveId, this.cover);
-        }
-      } finally {
-        await source.release();
-      }
-    } catch (error) {
-      // The extension placeholder remains available when a cover cannot be loaded.
-    } finally {
-      this.isLoading = false;
-    }
-  }
-}
-
 @Entry
 @Component
 struct Index {
@@ -220,10 +123,15 @@ struct Index {
   @State private serverUrl: string = '';
   @State private apiKey: string = '';
   @State private isLoading: boolean = false;
-  @State private isConnected: boolean = false;
   @State private errorMessage: string = '';
   @State private isLibraryLoading: boolean = false;
+  // A startup refresh runs without hiding the cached library, so it needs its
+  // own flag: the page keeps showing content while this is true.
+  @State private isLibraryRefreshing: boolean = false;
   @State private libraryError: string = '';
+  // Non-blocking hint shown above the grid, e.g. when a background refresh
+  // failed and the library on screen is the cached one.
+  @State private libraryNotice: string = '';
   @State private searchText: string = '';
   @State private isSearchMode: boolean = false;
   @State private isCategoryPopupVisible: boolean = false;
@@ -242,6 +150,21 @@ struct Index {
   private completeArchiveIndex: Array<ArchiveItem> = [];
   private archiveDataSource: ArchiveDataSource = new ArchiveDataSource();
   private progressPersistTimer: number = -1;
+  private searchDebounceTimer: number = -1;
+  // Progress changed since the index was last written in full. Kept small on
+  // purpose: rewriting the whole index per page turn serialised every archive
+  // (tags included) and wrote it synchronously on the UI thread.
+  private pendingProgress: Record<string, number> = {};
+  // Read times bumped locally since the index was last written in full, kept in
+  // the same overlay as `pendingProgress` so the history order survives a
+  // restart before the next refresh reports the server's own `lastreadtime`.
+  private pendingReadTimes: Record<string, number> = {};
+  // Random ranks are drawn lazily and kept for the session, so browsing a
+  // category or searching does not shuffle the library on every keystroke.
+  // Only the "Random" sort mode ever fills this map.
+  private shuffleRanks: Map<string, number> = new Map<string, number>();
+  // O(1) progress lookup instead of scanning the library on every page turn.
+  private archiveById: Map<string, ArchiveItem> = new Map<string, ArchiveItem>();
   private libraryLandscape: boolean = false;
   private readerFullscreenActive: boolean = false;
   private libraryWindowRequestId: number = 0;
@@ -290,9 +213,7 @@ struct Index {
 
   @Builder
   private pageRouter(name: string, param: Object) {
-    if (name === 'ArchiveDetail') {
-      ArchiveDetailPage({ archive: param as ArchiveItem })
-    } else if (name === 'ArchiveReader') {
+    if (name === 'ArchiveReader') {
       ArchiveReaderPage({
         params: param as ReaderRouteParams,
         onProgressChanged: (archiveId: string, pageNumber: number): void => {
@@ -340,127 +261,33 @@ struct Index {
       DownloadedArchivesPage()
     } else if (name === 'DownloadManager') {
       DownloadManagerPage()
+    } else if (name === 'History') {
+      HistoryPage({
+        // A provider rather than a snapshot: the page re-reads the list every
+        // time it is shown, so it never renders archives removed meanwhile.
+        archivesProvider: (): Array<ArchiveItem> => {
+          return this.completeArchiveIndex;
+        }
+      })
+    } else {
+      // An unregistered route name would otherwise render an empty destination
+      // with no indication of what went wrong.
+      Column() {
+        Text(localized('无法打开该页面'))
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(15)
+          .fontColor($r('app.color.text_secondary'))
+      }
+      .width('100%')
+      .height('100%')
+      .justifyContent(FlexAlign.Center)
+      .backgroundColor($r('app.color.page_background'))
     }
   }
 
   private archiveInfoParams(param: Object): ArchiveInfoRouteParams {
     return param instanceof ArchiveInfoRouteParams ?
       param : new ArchiveInfoRouteParams(param as ArchiveItem);
-  }
-
-  @Builder
-  private setupPage() {
-    Scroll() {
-      Column({ space: 20 }) {
-        Column({ space: 8 }) {
-          Text('LanArk')
-            .copyOption(CopyOptions.LocalDevice)
-            .fontSize(32)
-            .fontWeight(FontWeight.Bold)
-            .fontColor($r('app.color.text_primary'))
-          Text($r('app.string.setup_subtitle'))
-            .copyOption(CopyOptions.LocalDevice)
-            .fontSize(16)
-            .fontColor($r('app.color.text_secondary'))
-            .textAlign(TextAlign.Center)
-        }
-        .width('100%')
-        .margin({ bottom: 12 })
-
-        Column({ space: 8 }) {
-          Text($r('app.string.server_url_label'))
-            .copyOption(CopyOptions.LocalDevice)
-            .fontSize(15)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_primary'))
-            .width('100%')
-          TextInput({
-            placeholder: $r('app.string.server_url_placeholder'),
-            text: this.serverUrl
-          })
-            .type(InputType.Normal)
-            .height(52)
-            .fontColor($r('app.color.text_primary'))
-            .placeholderColor($r('app.color.text_tertiary'))
-            .backgroundColor($r('app.color.surface'))
-            .borderRadius(12)
-            .onChange((value: string) => {
-              this.serverUrl = value;
-              this.errorMessage = '';
-            })
-        }
-        .width('100%')
-
-        Column({ space: 8 }) {
-          Text($r('app.string.api_key_label'))
-            .copyOption(CopyOptions.LocalDevice)
-            .fontSize(15)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_primary'))
-            .width('100%')
-          TextInput({
-            placeholder: $r('app.string.api_key_placeholder'),
-            text: this.apiKey
-          })
-            .type(InputType.Password)
-            .showPasswordIcon(true)
-            .height(52)
-            .fontColor($r('app.color.text_primary'))
-            .placeholderColor($r('app.color.text_tertiary'))
-            .backgroundColor($r('app.color.surface'))
-            .borderRadius(12)
-            .onChange((value: string) => {
-              this.apiKey = value;
-              this.errorMessage = '';
-            })
-          Text($r('app.string.api_key_storage_hint'))
-            .copyOption(CopyOptions.LocalDevice)
-            .fontSize(13)
-            .fontColor($r('app.color.text_tertiary'))
-            .width('100%')
-        }
-        .width('100%')
-
-        if (this.errorMessage.length > 0) {
-          Text(this.errorMessage)
-            .copyOption(CopyOptions.LocalDevice)
-            .fontSize(14)
-            .fontColor($r('app.color.error'))
-            .width('100%')
-            .padding(12)
-            .backgroundColor($r('app.color.error_soft'))
-            .borderRadius(10)
-        }
-
-        Button(this.isLoading ? $r('app.string.connecting') : $r('app.string.connect'))
-          .width('100%')
-          .height(52)
-          .fontSize(17)
-          .fontWeight(FontWeight.Medium)
-          .enabled(!this.isLoading)
-          .backgroundColor($r('app.color.accent'))
-          .onClick(() => {
-            this.connectAndSave();
-          })
-
-        if (this.serverUrl.length > 0) {
-          Button(localized('清除保存的服务器配置'))
-            .width('100%')
-            .height(48)
-            .fontSize(15)
-            .backgroundColor(Color.Transparent)
-            .fontColor($r('app.color.error'))
-            .onClick(() => {
-              this.clearConfig();
-            })
-        }
-      }
-      .width('100%')
-      .constraintSize({ maxWidth: 560 })
-      .padding({ left: 24, right: 24, top: 72, bottom: 48 })
-    }
-    .width('100%')
-    .height('100%')
   }
 
   @Builder
@@ -505,7 +332,7 @@ struct Index {
               .layoutWeight(1)
               .onChange((value: string) => {
                 this.searchText = value;
-                this.applyArchiveFilter();
+                this.scheduleArchiveFilter();
               })
           }
           .height(40)
@@ -527,6 +354,13 @@ struct Index {
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .layoutWeight(1)
 
+          if (this.isLibraryRefreshing) {
+            LoadingProgress()
+              .width(18)
+              .height(18)
+              .accessibilityText(localized('正在刷新档案库'))
+          }
+
           Button() {
             Image($r('app.media.icon_search'))
               .width(19)
@@ -542,6 +376,26 @@ struct Index {
             .accessibilityText(localized('搜索档案'))
             .onClick(() => {
               this.enterSearchMode();
+            })
+
+          Button() {
+            Image($r('app.media.icon_history'))
+              .width(19)
+              .height(19)
+              .renderMode(ImageRenderMode.Template)
+              .fillColor($r('app.color.text_secondary'))
+          }
+            .width(40)
+            .height(40)
+            .borderRadius(20)
+            .backgroundColor($r('app.color.surface'))
+            .border({ width: 1, color: $r('app.color.divider') })
+            .accessibilityText(localized('观看历史'))
+            .onClick(() => {
+              this.pathStack.pushPath({
+                name: 'History',
+                param: new Object()
+              });
             })
 
           Button() {
@@ -611,7 +465,7 @@ struct Index {
             .width(40)
             .height(40)
             .borderRadius(20)
-            .enabled(!this.isLibraryLoading)
+            .enabled(!this.isLibraryLoading && !this.isLibraryRefreshing)
             .backgroundColor($r('app.color.accent_soft'))
             .accessibilityText(localized('刷新档案库'))
             .onClick(() => {
@@ -659,6 +513,17 @@ struct Index {
             })
         }
         .width('100%')
+      }
+
+      if (this.libraryNotice.length > 0) {
+        Text(this.libraryNotice)
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(12)
+          .fontColor($r('app.color.text_secondary'))
+          .width('100%')
+          .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+          .backgroundColor($r('app.color.surface_muted'))
+          .borderRadius(10)
       }
 
       if (this.isLibraryLoading) {
@@ -799,6 +664,8 @@ struct Index {
     .borderRadius(10)
     .backgroundColor(this.selectedCategoryId === categoryId ?
       $r('app.color.accent_soft') : Color.Transparent)
+    .accessibilityText(label)
+    .accessibilityChecked(this.selectedCategoryId === categoryId)
     .onClick(() => {
       this.isCategoryPopupVisible = false;
       this.selectCategory(categoryId, label);
@@ -887,9 +754,15 @@ struct Index {
     .borderRadius(10)
     .backgroundColor(this.sortModeIndex === index ?
       $r('app.color.accent_soft') : Color.Transparent)
+    .accessibilityText(label)
+    .accessibilityChecked(this.sortModeIndex === index)
     .onClick(() => {
       this.sortModeIndex = index;
       this.sortAscending = index === 1 || index >= 6;
+      if (index === RANDOM_SORT_INDEX) {
+        // Picking "Random" again is how the user asks for a new shuffle.
+        this.shuffleRanks = new Map<string, number>();
+      }
       this.isSortPopupVisible = false;
       this.applyArchiveFilter();
       this.saveLibrarySettings();
@@ -1020,14 +893,14 @@ struct Index {
       this.serverUrl = config.serverUrl;
       this.apiKey = config.apiKey;
       if (config.serverUrl.length > 0) {
-        this.isConnected = true;
         this.restoreCachedLibrary(config.serverUrl);
+        // The cached index is already usable, so the up-to-date one is fetched
+        // in the background instead of making the user wait for the network.
+        this.refreshLibraryOnStartup();
       } else {
-        this.isConnected = false;
         this.libraryError = localized('请先在设置中配置服务器，然后点击刷新获取档案索引');
       }
     } catch (error) {
-      this.isConnected = false;
       this.libraryError = localized('请先在设置中配置服务器，然后点击刷新获取档案索引');
     }
   }
@@ -1057,11 +930,9 @@ struct Index {
         await this.repository().save(new ServerConfig(normalizedUrl, this.apiKey));
       }
       this.serverUrl = normalizedUrl;
-      this.isConnected = true;
       await this.loadLibrary(client);
     } catch (error) {
       this.errorMessage = this.describeError(error);
-      this.isConnected = false;
     } finally {
       this.isLoading = false;
     }
@@ -1075,15 +946,47 @@ struct Index {
     try {
       const client: LanraragiApiClient =
         new LanraragiApiClient(this.serverUrl, this.apiKey);
-      await this.loadLibrary(client);
+      await this.loadLibrary(client, false);
     } catch (error) {
       this.libraryError = this.describeError(error);
     }
   }
 
-  private async loadLibrary(client: LanraragiApiClient): Promise<void> {
-    this.isLibraryLoading = true;
-    this.libraryError = '';
+  /**
+   * Fetches the index right after startup, keeping the cached one on screen.
+   *
+   * The cached index is shown first so the library is usable immediately; the
+   * server's copy then replaces it in place. Nothing here waits for the user.
+   */
+  private async refreshLibraryOnStartup(): Promise<void> {
+    if (this.isLibraryRefreshing || this.isLibraryLoading) {
+      return;
+    }
+    this.isLibraryRefreshing = true;
+    try {
+      const client: LanraragiApiClient =
+        new LanraragiApiClient(this.serverUrl, this.apiKey);
+      await this.loadLibrary(client, true);
+    } finally {
+      this.isLibraryRefreshing = false;
+    }
+  }
+
+  /**
+   * Loads the full index.
+   *
+   * `silent` marks a refresh that runs while the user is already looking at a
+   * library: it must not swap the page for the loading state, and a failure must
+   * leave the cached content alone instead of replacing it with an error.
+   */
+  private async loadLibrary(client: LanraragiApiClient, silent: boolean = false): Promise<void> {
+    this.libraryNotice = '';
+    if (!silent) {
+      // Only an explicit refresh may swap the page for the loading state.
+      this.isLibraryLoading = true;
+      this.libraryError = '';
+    }
+    let failure: string = '';
     try {
       const loadedArchives: Array<ArchiveItem> = await client.fetchArchiveIndex();
       let loadedCategories: Array<CategoryItem> = this.categories;
@@ -1098,19 +1001,47 @@ struct Index {
       this.selectedCategoryId = '';
       this.selectedCategoryName = '全部';
       this.searchText = '';
+      this.reindexArchiveLookup(loadedArchives);
       try {
         this.indexCacheRepository(this.serverUrl).save(
           loadedArchives,
           loadedCategories
         );
+        // The index now embeds current progress, so the overlay is redundant.
+        this.pendingProgress = {};
+        this.pendingReadTimes = {};
+        await this.progressOverlayRepository().clear();
       } catch (error) {
         // A successful refresh remains usable if local index persistence fails.
       }
       this.applyArchiveFilter();
+      this.libraryError = '';
     } catch (error) {
-      this.libraryError = this.describeError(error);
+      failure = this.describeError(error);
     } finally {
-      this.isLibraryLoading = false;
+      if (!silent) {
+        this.isLibraryLoading = false;
+      }
+    }
+    if (failure.length === 0) {
+      return;
+    }
+    if (silent && this.completeArchiveIndex.length > 0) {
+      // There is something to read on screen, so the failure is reported as a
+      // hint line rather than by hiding the library. A toast cannot be used
+      // here: during startup the window is not focusable yet and the system
+      // silently drops it.
+      this.libraryNotice = localized('无法刷新档案库，正在显示本地缓存');
+    } else {
+      this.libraryError = failure;
+    }
+  }
+
+  private showToast(message: string): void {
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (error) {
+      // A message that cannot be displayed must not affect the library.
     }
   }
 
@@ -1133,7 +1064,50 @@ struct Index {
     this.selectedCategoryName = '全部';
     this.searchText = '';
     this.libraryError = '';
+    this.reindexArchiveLookup(cached.archives);
     this.applyArchiveFilter();
+    // Positions written after the index snapshot are applied on top of it.
+    this.applyProgressOverlay().catch(() => {});
+  }
+
+  private reindexArchiveLookup(archives: Array<ArchiveItem>): void {
+    this.archiveById = new Map<string, ArchiveItem>();
+    for (let index: number = 0; index < archives.length; index += 1) {
+      this.archiveById.set(archives[index].id, archives[index]);
+    }
+  }
+
+  /** Re-applies page positions recorded after the cached index was written. */
+  private async applyProgressOverlay(): Promise<void> {
+    const repository: LibraryProgressOverlayRepository = this.progressOverlayRepository();
+    const overlay: Record<string, number> = await repository.load();
+    const readTimes: Record<string, number> = await repository.loadReadTimes();
+    this.pendingProgress = overlay;
+    this.pendingReadTimes = readTimes;
+    let applied: boolean = false;
+    this.archiveById.forEach((archive: ArchiveItem, archiveId: string) => {
+      const page: number | undefined = overlay[archiveId];
+      if (page !== undefined && Number.isFinite(page) && page > 0) {
+        archive.setProgress(page);
+        applied = true;
+      }
+      const readAt: number | undefined = readTimes[archiveId];
+      if (readAt !== undefined && Number.isFinite(readAt) && readAt > 0) {
+        // Only raises the stored value, so a newer server timestamp wins.
+        archive.markReadAt(readAt);
+      }
+    });
+    // The badges read their archive through @ObjectLink, so a full re-filter is
+    // only needed when the completed-filtered set can actually change.
+    if (applied && this.hideCompleted) {
+      this.applyArchiveFilter();
+    }
+  }
+
+  private progressOverlayRepository(): LibraryProgressOverlayRepository {
+    const context: common.UIAbilityContext =
+      this.getUIContext().getHostContext() as common.UIAbilityContext;
+    return new LibraryProgressOverlayRepository(context);
   }
 
   private async selectCategory(categoryId: string, categoryName: string): Promise<void> {
@@ -1172,13 +1146,28 @@ struct Index {
     }
   }
 
+  /**
+   * Re-runs the library filter after a short pause.
+   *
+   * Filtering and sorting walk the entire index, so running it on every
+   * keystroke stalls typing once the library is large.
+   */
+  private scheduleArchiveFilter(): void {
+    if (this.searchDebounceTimer >= 0) {
+      clearTimeout(this.searchDebounceTimer);
+    }
+    this.searchDebounceTimer = setTimeout(() => {
+      this.searchDebounceTimer = -1;
+      this.applyArchiveFilter();
+    }, 250);
+  }
+
   private applyArchiveFilter(): void {
     const query: string = this.searchText.trim().toLowerCase();
     let filtered: Array<ArchiveItem> = this.allArchives.slice();
     if (query.length > 0) {
       filtered = this.allArchives.filter((archive: ArchiveItem) => {
-        return archive.title.toLowerCase().includes(query) ||
-          archive.tags.toLowerCase().includes(query);
+        return archive.searchKey().includes(query);
       });
     }
     if (this.hideCompleted) {
@@ -1265,6 +1254,9 @@ struct Index {
       case 11:
         result = left.tagValue('parody').localeCompare(right.tagValue('parody'));
         break;
+      case RANDOM_SORT_INDEX:
+        result = this.shuffleRank(left.id) - this.shuffleRank(right.id);
+        break;
       default:
         result = left.title.localeCompare(right.title);
         break;
@@ -1288,8 +1280,26 @@ struct Index {
       localized('活动'),
       localized('系列'),
       localized('角色'),
-      localized('原作')
+      localized('原作'),
+      localized('随机')
     ];
+  }
+
+  /**
+   * Stable random rank for one archive.
+   *
+   * The server only sorts by title or last read time, so "Random" is a local
+   * shuffle. Ranks are drawn on first use and cached, which keeps the ordering
+   * stable while searching or switching category instead of reshuffling on
+   * every redraw.
+   */
+  private shuffleRank(archiveId: string): number {
+    let rank: number | undefined = this.shuffleRanks.get(archiveId);
+    if (rank === undefined) {
+      rank = Math.random();
+      this.shuffleRanks.set(archiveId, rank);
+    }
+    return rank;
   }
 
   private sortModeLabel(): string {
@@ -1357,23 +1367,19 @@ struct Index {
   }
 
   private updateArchiveProgress(archiveId: string, pageNumber: number): void {
-    console.info(`[ProgressDebug] library receive archive=${archiveId} page=${pageNumber}`);
-    let updatedArchive: ArchiveItem | undefined = undefined;
-    for (let index = 0; index < this.completeArchiveIndex.length; index += 1) {
-      if (this.completeArchiveIndex[index].id === archiveId) {
-        updatedArchive = this.completeArchiveIndex[index];
-        updatedArchive.setProgress(pageNumber);
-        break;
-      }
+    // `allArchives` and `completeArchiveIndex` hold the same instances, so one
+    // map lookup updates every view that observes the archive.
+    const archive: ArchiveItem | undefined = this.archiveById.get(archiveId);
+    if (archive !== undefined) {
+      archive.setProgress(pageNumber);
+      archive.markReadAt(Math.floor(Date.now() / 1000));
+      this.pendingReadTimes[archiveId] = archive.lastReadTime;
+    } else {
+      // The archive is not in the library (deleted or a fresh index); keep the
+      // history entry for it rather than dropping the read time.
+      this.pendingReadTimes[archiveId] = Math.floor(Date.now() / 1000);
     }
-    for (let index = 0; index < this.allArchives.length; index += 1) {
-      if (this.allArchives[index].id === archiveId) {
-        if (this.allArchives[index] !== updatedArchive) {
-          this.allArchives[index].setProgress(pageNumber);
-        }
-        break;
-      }
-    }
+    this.pendingProgress[archiveId] = pageNumber;
     const visibleArchive: ArchiveItem | undefined =
       this.archiveDataSource.updateProgress(archiveId, pageNumber);
     if (this.hideCompleted && visibleArchive !== undefined &&
@@ -1384,6 +1390,7 @@ struct Index {
   }
 
   private removeDeletedArchive(archiveId: string): void {
+    this.archiveById.delete(archiveId);
     this.completeArchiveIndex = this.completeArchiveIndex.filter((archive: ArchiveItem) => {
       return archive.id !== archiveId;
     });
@@ -1412,13 +1419,7 @@ struct Index {
       // The server deletion succeeded; local cleanup failure must not restore the card.
     }
     this.pathStack.clear();
-    try {
-      this.getUIContext().getPromptAction().showToast({
-        message: localized('档案已删除')
-      });
-    } catch (error) {
-      // The card has already been removed even if a toast cannot be displayed.
-    }
+    this.showToast(localized('档案已删除'));
   }
 
   private scheduleProgressPersistence(): void {
@@ -1427,14 +1428,10 @@ struct Index {
     }
     this.progressPersistTimer = setTimeout(() => {
       this.progressPersistTimer = -1;
-      try {
-        this.indexCacheRepository(this.serverUrl).save(
-          this.completeArchiveIndex,
-          this.categories
-        );
-      } catch (error) {
-        // UI progress remains updated if local persistence is unavailable.
-      }
+      // Only the changed page positions are written here. The full index is
+      // rewritten when the library is refreshed, not on every page turn.
+      this.progressOverlayRepository().save(this.pendingProgress, this.pendingReadTimes)
+        .catch(() => {});
     }, 500);
   }
 
@@ -1506,14 +1503,12 @@ struct Index {
       this.errorMessage = '';
     } catch (error) {
       this.errorMessage = this.describeError(error);
-      this.isConnected = false;
     }
   }
 
   private applyServerConfig(config: ServerConfig): void {
     this.serverUrl = config.serverUrl;
     this.apiKey = config.apiKey;
-    this.isConnected = true;
     this.errorMessage = '';
     this.restoreCachedLibrary(config.serverUrl);
   }
@@ -1529,7 +1524,6 @@ struct Index {
     this.archiveDataSource.replace([]);
     this.visibleArchiveCount = 0;
     this.searchText = '';
-    this.isConnected = false;
   }
 
   private repository(): ServerConfigRepository {
@@ -1551,9 +1545,8 @@ struct Index {
   }
 
   private describeError(error: Object): string {
-    if (error instanceof Error && error.message.length > 0) {
-      return error.message;
-    }
-    return localized('连接失败，请检查服务器地址、API Key 和网络状态');
+    return describeUserFacingError(error, localized('连接失败，请检查服务器地址、API Key 和网络状态'));
   }
 }
+
+

@@ -18,7 +18,7 @@ import {
   ReaderRouteParams,
   ServerConfig
 } from '../../domain/model/LanraragiModels';
-import { localized } from '../../common/Localization';
+import { describeUserFacingError, localized } from '../../common/Localization';
 
 // Keep the decoded page at a useful reading resolution instead of decoding an
 // arbitrarily large source image and asking the renderer to shrink it later.
@@ -27,6 +27,24 @@ import { localized } from '../../common/Localization';
 const MAX_READER_DECODE_LONG_EDGE: number = 4096;
 const MAX_READER_DECODE_BYTES: number = 64 * 1024 * 1024;
 const RGBA_BYTES_PER_PIXEL: number = 4;
+
+// Every paged image is wrapped in a zoomable Scroll, and Scroll only supports
+// pinch zoom while scrollable is ScrollDirection.FREE. ArkUI arbitrates nested
+// scrollable gestures child-first, so that Scroll claims the horizontal pan and
+// the Swiper never sees it. The reader therefore recognizes the horizontal
+// swipe itself, in parallel with the page content, and turns the page through
+// the Swiper controller.
+const READER_SWIPE_TRIGGER_DISTANCE: number = 12;
+const READER_SWIPE_TURN_MIN_DISTANCE: number = 36;
+const READER_SWIPE_TURN_VIEWPORT_RATIO: number = 0.12;
+const READER_ZOOM_ACTIVE_SCALE: number = 1.01;
+// The controls overlay lets touches through to the page below it so that tapping
+// the margins still works, so a scrub on the progress bar would otherwise also
+// register as a page-turn swipe. This reserves the bar at the bottom of the page.
+const READER_CONTROLS_BAR_HEIGHT: number = 100;
+// A swipe slides to the next page over this duration (the Swiper's own
+// transition timing); taps and slider moves stay instantaneous.
+const READER_PAGE_TURN_DURATION_MS: number = 300;
 
 function readerDecodeSize(info: image.ImageInfo): image.Size | undefined {
   const sourceWidth: number = Math.max(Math.floor(info.size.width), 1);
@@ -170,14 +188,23 @@ struct ReaderImageView {
   @State private zoomScale: number = 1;
   @State private viewportWidth: number = 1;
   @State private viewportHeight: number = 1;
+  // Set when the component is destroyed; a decode still awaiting at that point
+  // would otherwise assign `pixelMap` after the only release ran.
+  private destroyed: boolean = false;
 
   aboutToAppear(): void {
     this.loadImage();
   }
 
   aboutToBeDeleted(): void {
+    this.destroyed = true;
+    this.releasePageImage();
+  }
+
+  private releasePageImage(): void {
     if (this.pixelMap !== undefined) {
-      this.pixelMap.release();
+      this.pixelMap.release().catch(() => {});
+      this.pixelMap = undefined;
     }
   }
 
@@ -338,16 +365,24 @@ struct ReaderImageView {
           this.imageAspectRatio = imageInfo.size.width / imageInfo.size.height;
         }
         const decodeSize: image.Size | undefined = readerDecodeSize(imageInfo);
+        let decoded: image.PixelMap | undefined = undefined;
         if (decodeSize === undefined) {
-          this.pixelMap = await source.createPixelMap();
+          decoded = await source.createPixelMap();
         } else {
-          this.pixelMap = await source.createPixelMap({
+          decoded = await source.createPixelMap({
             desiredSize: decodeSize
           });
         }
         if (shouldCache) {
           cache.writePage(this.archiveId, this.page.pageNumber, buffer);
         }
+        if (this.destroyed) {
+          // The page was scrolled away or left while decoding, so this decode
+          // holds the only reference and must be released here.
+          decoded.release().catch(() => {});
+          return;
+        }
+        this.pixelMap = decoded;
       } finally {
         await source.release();
       }
@@ -359,10 +394,7 @@ struct ReaderImageView {
   }
 
   private describeError(error: Object): string {
-    if (error instanceof Error && error.message.length > 0) {
-      return error.message;
-    }
-    return localized('页面加载失败');
+    return describeUserFacingError(error, localized('页面加载失败'));
   }
 }
 
@@ -388,9 +420,12 @@ export struct ArchiveReaderPage {
   @State private interpolationIndex: number = 3;
   @State private offlineProgress: number = 0;
   @State private readerViewportWidth: number = 1;
+  @State private readerViewportHeight: number = 1;
   @State private waterfallScale: number = 1;
   @State private pageZoomScale: number = 1;
   private waterfallScaleStart: number = 1;
+  private horizontalSwipeOffset: number = 0;
+  private horizontalSwipeSuppressed: boolean = false;
   private swiperController: SwiperController = new SwiperController();
   private verticalScroller: Scroller = new Scroller();
   private pageDataSource: ReaderPageDataSource = new ReaderPageDataSource();
@@ -409,14 +444,10 @@ export struct ArchiveReaderPage {
 
   aboutToBeDeleted(): void {
     this.restoreReaderWindow();
-    if (this.params.archive.id.length === 0) {
-      return;
-    }
-    try {
-      this.imageCache().clearArchivePages(this.params.archive.id);
-    } catch (error) {
-      // Reader cache cleanup must never block leaving the document.
-    }
+    // The decoded page cache is deliberately kept. It lives in cacheDir, which
+    // the system reclaims under storage pressure, and clearing it here forced a
+    // full re-download of the document the next time it was opened. Settings
+    // still offers an explicit "clear reading cache" action.
   }
 
   build() {
@@ -510,19 +541,41 @@ export struct ArchiveReaderPage {
             .index(this.currentSpreadIndex())
             .loop(false)
             .indicator(false)
-            .duration(0)
+            .duration(READER_PAGE_TURN_DURATION_MS)
             .direction(this.readDirectionIndex === 1 ? Direction.Rtl : Direction.Ltr)
             .cachedCount(this.preloadPageCount)
-            .disableSwipe(this.pageZoomScale > 1.01)
+            .disableSwipe(true)
             .onChange((index: number) => {
               this.pageZoomScale = 1;
               this.onVisibleSpreadChanged(index);
             })
+            .parallelGesture(
+              PanGesture({
+                fingers: 1,
+                direction: PanDirection.Horizontal,
+                distance: READER_SWIPE_TRIGGER_DISTANCE
+              })
+                .onActionStart((event: GestureEvent) => {
+                  this.handleReaderSwipeStart(event);
+                })
+                .onActionUpdate((event: GestureEvent) => {
+                  this.handleReaderSwipeUpdate(event);
+                })
+                .onActionEnd(() => {
+                  this.handleReaderSwipeEnd();
+                })
+                .onActionCancel(() => {
+                  this.handleReaderSwipeCancel();
+                })
+            )
             .width('100%')
             .height('100%')
             .onAreaChange((oldValue: Area, newValue: Area) => {
               if (typeof newValue.width === 'number' && newValue.width > 0) {
                 this.readerViewportWidth = newValue.width;
+              }
+              if (typeof newValue.height === 'number' && newValue.height > 0) {
+                this.readerViewportHeight = newValue.height;
               }
             })
             .onClick((event: ClickEvent) => {
@@ -547,19 +600,41 @@ export struct ArchiveReaderPage {
             .index(this.currentPageIndex)
             .loop(false)
             .indicator(false)
-            .duration(0)
+            .duration(READER_PAGE_TURN_DURATION_MS)
             .direction(this.readDirectionIndex === 1 ? Direction.Rtl : Direction.Ltr)
             .cachedCount(this.preloadPageCount)
-            .disableSwipe(this.pageZoomScale > 1.01)
+            .disableSwipe(true)
             .onChange((index: number) => {
               this.pageZoomScale = 1;
               this.onVisiblePageChanged(index);
             })
+            .parallelGesture(
+              PanGesture({
+                fingers: 1,
+                direction: PanDirection.Horizontal,
+                distance: READER_SWIPE_TRIGGER_DISTANCE
+              })
+                .onActionStart((event: GestureEvent) => {
+                  this.handleReaderSwipeStart(event);
+                })
+                .onActionUpdate((event: GestureEvent) => {
+                  this.handleReaderSwipeUpdate(event);
+                })
+                .onActionEnd(() => {
+                  this.handleReaderSwipeEnd();
+                })
+                .onActionCancel(() => {
+                  this.handleReaderSwipeCancel();
+                })
+            )
             .width('100%')
             .height('100%')
             .onAreaChange((oldValue: Area, newValue: Area) => {
               if (typeof newValue.width === 'number' && newValue.width > 0) {
                 this.readerViewportWidth = newValue.width;
+              }
+              if (typeof newValue.height === 'number' && newValue.height > 0) {
+                this.readerViewportHeight = newValue.height;
               }
             })
             .onClick((event: ClickEvent) => {
@@ -952,12 +1027,19 @@ export struct ArchiveReaderPage {
     this.syncProgress(this.pages[spread.endIndex]);
   }
 
-  private goToPage(targetIndex: number): void {
+  private goToPage(targetIndex: number, animated: boolean = false): void {
     if (targetIndex < 0 || targetIndex >= this.pages.length) {
       return;
     }
+    if (animated) {
+      // Let the Swiper own the transition. Publishing the index here would make
+      // the bound Swiper index jump to the target and cancel the slide, so the
+      // settled index is published from onChange instead.
+      this.moveReaderToIndex(targetIndex, true);
+      return;
+    }
     this.currentPageIndex = targetIndex;
-    this.moveReaderToIndex(targetIndex);
+    this.moveReaderToIndex(targetIndex, false);
     this.syncProgress(this.pages[targetIndex]);
   }
 
@@ -975,6 +1057,68 @@ export struct ArchiveReaderPage {
     this.toggleControlsFromCenter(localX);
   }
 
+  private handleReaderSwipeStart(event: GestureEvent): void {
+    this.horizontalSwipeOffset = 0;
+    this.horizontalSwipeSuppressed = this.isReaderSwipeSuppressed(event);
+  }
+
+  private handleReaderSwipeUpdate(event: GestureEvent): void {
+    if (event.fingerList.length > 1) {
+      // A second finger means the reader is pinching to zoom, not turning a page.
+      this.horizontalSwipeSuppressed = true;
+    }
+    this.horizontalSwipeOffset = event.offsetX;
+  }
+
+  private handleReaderSwipeEnd(): void {
+    const offsetX: number = this.horizontalSwipeOffset;
+    const suppressed: boolean = this.horizontalSwipeSuppressed;
+    this.resetReaderSwipe();
+    if (!suppressed) {
+      this.turnPageBySwipe(offsetX);
+    }
+  }
+
+  private handleReaderSwipeCancel(): void {
+    this.resetReaderSwipe();
+  }
+
+  private resetReaderSwipe(): void {
+    this.horizontalSwipeOffset = 0;
+    this.horizontalSwipeSuppressed = false;
+  }
+
+  private isReaderSwipeSuppressed(event: GestureEvent): boolean {
+    if (event.fingerList.length > 1) {
+      return true;
+    }
+    if (event.fingerList.length === 0) {
+      return false;
+    }
+    const touchY: number = event.fingerList[0].localY;
+    return this.controlsVisible &&
+      touchY >= this.readerViewportHeight - READER_CONTROLS_BAR_HEIGHT;
+  }
+
+  private turnPageBySwipe(offsetX: number): void {
+    // While a page is zoomed in, a horizontal drag pans the image instead.
+    if (this.pageZoomScale > READER_ZOOM_ACTIVE_SCALE) {
+      return;
+    }
+    const threshold: number = Math.max(
+      this.readerViewportWidth * READER_SWIPE_TURN_VIEWPORT_RATIO,
+      READER_SWIPE_TURN_MIN_DISTANCE
+    );
+    if (Math.abs(offsetX) < threshold) {
+      return;
+    }
+    // Dragging the page to the left advances a left-to-right document, while a
+    // right-to-left document advances when the page is dragged to the right.
+    const swipedForward: boolean = this.readDirectionIndex === 1 ?
+      offsetX > 0 : offsetX < 0;
+    this.goToReadingStep(swipedForward ? 1 : -1, true);
+  }
+
   private toggleControlsFromCenter(localX: number): void {
     const centerBoundary: number = this.readerViewportWidth * 0.35;
     const rightBoundary: number = this.readerViewportWidth * 0.65;
@@ -983,19 +1127,19 @@ export struct ArchiveReaderPage {
     }
   }
 
-  private moveReaderToIndex(targetIndex: number): void {
+  private moveReaderToIndex(targetIndex: number, animated: boolean = false): void {
     if (this.readerModeIndex === 2) {
-      this.verticalScroller.scrollToIndex(targetIndex, false, ScrollAlign.START);
+      this.verticalScroller.scrollToIndex(targetIndex, animated, ScrollAlign.START);
     } else if (this.readerModeIndex === 1) {
-      this.swiperController.changeIndex(this.spreadIndexForPage(targetIndex), false);
+      this.swiperController.changeIndex(this.spreadIndexForPage(targetIndex), animated);
     } else {
-      this.swiperController.changeIndex(targetIndex, false);
+      this.swiperController.changeIndex(targetIndex, animated);
     }
   }
 
-  private goToReadingStep(delta: number): void {
+  private goToReadingStep(delta: number, animated: boolean = false): void {
     if (this.readerModeIndex !== 1) {
-      this.goToPage(this.currentPageIndex + delta);
+      this.goToPage(this.currentPageIndex + delta, animated);
       return;
     }
     const targetSpreadIndex: number = this.currentSpreadIndex() + delta;
@@ -1004,6 +1148,11 @@ export struct ArchiveReaderPage {
       return;
     }
     const target: ReaderSpread = this.spreadDataSource.getData(targetSpreadIndex);
+    if (animated) {
+      // As in goToPage: onChange publishes the settled spread index.
+      this.swiperController.changeIndex(targetSpreadIndex, true);
+      return;
+    }
     this.currentPageIndex = target.endIndex;
     this.swiperController.changeIndex(targetSpreadIndex, false);
     this.syncProgress(this.pages[target.endIndex]);
@@ -1128,7 +1277,6 @@ export struct ArchiveReaderPage {
   }
 
   private async syncProgress(page: ReaderPage): Promise<void> {
-    console.info(`[ProgressDebug] reader progress archive=${this.params.archive.id} page=${page.pageNumber}`);
     if (this.params.offline) {
       this.offlineProgress = page.pageNumber;
       const context: common.UIAbilityContext =
@@ -1155,8 +1303,6 @@ export struct ArchiveReaderPage {
   private exitReader(): void {
     if (this.pages.length > 0 && this.currentPageIndex >= 0 &&
       this.currentPageIndex < this.pages.length) {
-      console.info(`[ProgressDebug] exit archive=${this.params.archive.id} ` +
-        `page=${this.pages[this.currentPageIndex].pageNumber}`);
       // Update the local library before popping the destination. The callback
       // is synchronous, so the library card is refreshed immediately.
       this.syncProgress(this.pages[this.currentPageIndex]);
@@ -1253,9 +1399,6 @@ export struct ArchiveReaderPage {
   }
 
   private describeError(error: Object): string {
-    if (error instanceof Error && error.message.length > 0) {
-      return error.message;
-    }
-    return localized('档案加载失败');
+    return describeUserFacingError(error, localized('档案加载失败'));
   }
 }

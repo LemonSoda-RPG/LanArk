@@ -25,3 +25,8 @@
 *.hap
 *.app
 *.log
+/.dsh/
+
+# Machine-local notes and downloaded references
+/AGENTS.local.md
+/.reference/

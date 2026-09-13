@@ -23,7 +23,8 @@ export class LibrarySettings {
     gridLayout: boolean = true,
     gridColumns: number = 0
   ) {
-    this.sortModeIndex = Math.min(Math.max(sortModeIndex, 0), 11);
+    // 0..11 are the metadata sorts, 12 is the local random shuffle.
+    this.sortModeIndex = Math.min(Math.max(sortModeIndex, 0), 12);
     this.sortAscending = sortAscending;
     this.hideCompleted = hideCompleted;
     this.gridLayout = gridLayout;

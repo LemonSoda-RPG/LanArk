@@ -1,18 +1,36 @@
 import { i18n } from '@kit.LocalizationKit';
+import { BusinessError } from '@kit.BasicServicesKit';
+
+let languageResolved: boolean = false;
+let englishActive: boolean = false;
 
 /**
- * Returns true when the system language is English.
+ * Returns true when the language this app renders in is English.
  *
- * ArkUI resource qualifiers handle strings referenced through `$r(...)`.
- * This helper covers the legacy inline labels that are still assembled in
- * ArkTS (for example, dynamic menu labels and validation messages).
+ * `$r(...)` resolves against the application's preferred language, which the
+ * user can set independently of the system language. This helper must read the
+ * same source, otherwise one screen can render in two languages at once.
+ * The result is memoised because the helper is called from render paths;
+ * `invalidateLanguageCache()` drops it when the configuration changes.
  */
 export function isEnglishSystemLanguage(): boolean {
-  try {
-    return i18n.System.getSystemLanguage().toLowerCase().startsWith('en');
-  } catch (error) {
-    return false;
+  if (!languageResolved) {
+    languageResolved = true;
+    try {
+      const preferred: string = i18n.System.getAppPreferredLanguage().toLowerCase();
+      englishActive = preferred.length > 0
+        ? preferred.startsWith('en')
+        : i18n.System.getSystemLanguage().toLowerCase().startsWith('en');
+    } catch (error) {
+      englishActive = false;
+    }
   }
+  return englishActive;
+}
+
+/** Drops the memoised language so the next lookup re-reads the configuration. */
+export function invalidateLanguageCache(): void {
+  languageResolved = false;
 }
 
 const TRANSLATIONS: Record<string, string> = {
@@ -41,6 +59,7 @@ const TRANSLATIONS: Record<string, string> = {
   '系列': 'Series',
   '角色': 'Character',
   '原作': 'Parody',
+  '随机': 'Random',
   '退出搜索': 'Exit search',
   '搜索档案': 'Search archives',
   '刷新档案库': 'Refresh library',
@@ -106,10 +125,11 @@ const TRANSLATIONS: Record<string, string> = {
   '进入时显示页码栏': 'Show page bar on entry',
   '打开档案时先显示页码与拖拽进度条': 'Show the page number and progress slider when opening an archive',
   '图片缓存': 'Image cache',
-  '封面长期保存，阅读页退出档案后自动删除': 'Covers are kept; reading pages are removed when you leave an archive',
+  '封面与阅读页都会保留在本机，系统空间紧张时可能自动回收':
+    'Covers and reading pages are kept on this device; the system may reclaim them under storage pressure',
   '清空缓存': 'Clear cache',
-  '阅读页只在当前阅读期间缓存；退出档案后自动释放。清理操作不会影响服务器档案、进度和连接配置。':
-    'Reading pages are cached only during the current session and released when you leave. Clearing the cache does not affect server archives, progress, or connection settings.',
+  '封面和阅读页都会保留在本机，重开同一档案时无需重新下载。清理操作不会影响服务器档案、进度和连接配置。':
+    'Covers and reading pages are kept on this device, so reopening an archive does not download it again. Clearing the cache does not affect server archives, progress, or connection settings.',
   '清空图片缓存？': 'Clear image cache?',
   '只会删除手机本地的封面和阅读页副本，下次查看时会重新从服务器加载。':
     'Only local cover and reading-page copies will be deleted. They will be downloaded again when needed.',
@@ -217,6 +237,34 @@ const TRANSLATIONS: Record<string, string> = {
   , '暂无下载任务': 'No download tasks'
   , '开始下载后，这里会显示实时进度。': 'Active download progress will appear here.'
   , '返回已下载': 'Back to downloaded archives'
+  , '项': 'items'
+  , '该档案正在下载，请先在下载管理中清除任务':
+    'This archive is downloading. Clear the task in Download manager first.'
+  , '无法确认本地下载状态，请稍后重试':
+    'Could not confirm the local download state. Try again in a moment.'
+  , '清除本机配置？': 'Clear local configuration?'
+  , '将删除本机保存的所有服务器地址和 API Key，服务器上的档案不会受影响。':
+    'Every saved server address and API key on this device will be deleted. Archives on the server are not affected.'
+  , '书库设置已保存': 'Library settings saved'
+  , '无法打开该页面': 'This page could not be opened'
+  , '观看历史': 'History'
+  , '全部历史': 'All history'
+  , '仅看在读': 'In progress'
+  , '显示全部历史': 'Show all history'
+  , '只显示正在阅读的档案': 'Show only archives in progress'
+  , '还没有阅读记录': 'No reading history yet'
+  , '没有正在阅读的档案': 'No archive is in progress'
+  , '打开档案开始阅读后，这里会按最近阅读时间排序。':
+    'Archives you open appear here, most recently read first.'
+  , '刚刚': 'just now'
+  , '分钟前': 'min ago'
+  , '今天': 'Today'
+  , '昨天': 'Yesterday'
+  , '月': '/'
+  , '日': ''
+  , '正在刷新档案库': 'Refreshing the library'
+  , '无法刷新档案库，正在显示本地缓存':
+    'Could not refresh the library. Showing the local copy.'
 };
 
 export function localized(chinese: string, english?: string): string {
@@ -227,4 +275,52 @@ export function localized(chinese: string, english?: string): string {
     return english;
   }
   return TRANSLATIONS[chinese] ?? chinese;
+}
+
+/**
+ * Maps a HarmonyOS network-stack error code to an actionable message.
+ *
+ * `http.request` reports its failures as `BusinessError`s whose `message` is
+ * English SDK text (for example "Failed to resolve the host name."). The code,
+ * not the message, decides what the user reads.
+ */
+export function describeNetworkErrorCode(code: number): string {
+  switch (code) {
+    case 2300001:
+      return localized('不支持的协议，请使用 http:// 或 https://');
+    case 2300006:
+      return localized('无法解析服务器地址，请检查地址是否正确');
+    case 2300007:
+      return localized('无法连接服务器，请检查地址、端口和网络');
+    case 2300028:
+      return localized('请求超时，请检查网络和服务器状态');
+    case 2300056:
+      return localized('连接已被远端关闭，请重试');
+    case 2300060:
+      return localized('服务器证书校验失败');
+    case 2300997:
+      return localized('系统禁止明文 HTTP 访问，请改用 HTTPS 或更换网络');
+    default:
+      return `${localized('网络请求失败')} (${code})`;
+  }
+}
+
+/**
+ * Returns a message that is safe to show the user.
+ *
+ * Errors raised by this app already carry localized text, so their message is
+ * reused. An error from a system stack carries English SDK text and is mapped
+ * through its code instead. `fallback` is used when there is nothing to report.
+ */
+export function describeUserFacingError(error: Object, fallback: string = ''): string {
+  // `Number.isFinite` rather than comparing with undefined: the field is typed
+  // `number`, and a plain Error simply has no code at runtime.
+  const code: number = (error as BusinessError).code;
+  if (Number.isFinite(code) && code !== 0) {
+    return describeNetworkErrorCode(code);
+  }
+  if (error instanceof Error && error.message.length > 0) {
+    return error.message;
+  }
+  return fallback.length > 0 ? fallback : localized('操作失败，请重试');
 }

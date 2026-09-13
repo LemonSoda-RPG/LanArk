@@ -9,20 +9,54 @@ export struct DownloadManagerPage {
   @Consume('pathStack') private pathStack: NavPathStack = new NavPathStack();
   @State private tasks: Array<DownloadTask> = [];
   @State private completedCount: number = 0;
-  private refreshTimer: number = -1;
+  private lastActiveCount: number = 0;
+  private isCountBusy: boolean = false;
+  // Bound once so the same reference can be unregistered.
+  private readonly downloadListener: () => void = (): void => {
+    this.onDownloadsChanged();
+  };
 
   aboutToAppear(): void {
     this.refresh();
-    this.refreshTimer = setInterval(() => {
-      this.refresh();
-    }, 500);
+    DownloadManager.addChangeListener(this.downloadListener);
   }
 
   aboutToDisappear(): void {
-    if (this.refreshTimer >= 0) {
-      clearInterval(this.refreshTimer);
-      this.refreshTimer = -1;
+    DownloadManager.removeChangeListener(this.downloadListener);
+  }
+
+  /**
+   * Re-reads the task list on change instead of every 500 ms.
+   *
+   * `snapshot()` builds fresh objects on every call, so the assignment is
+   * guarded by a value comparison; without it the whole list re-rendered twice
+   * per second even when nothing had changed.
+   */
+  private onDownloadsChanged(): void {
+    this.applySnapshot();
+    const active: number = this.activeTaskCount(this.tasks);
+    if (this.lastActiveCount > 0 && active === 0) {
+      // A download just stopped, so the offline archive set may have changed.
+      this.refreshCompletedCount();
     }
+    this.lastActiveCount = active;
+  }
+
+  private applySnapshot(): void {
+    const next: Array<DownloadTask> = DownloadManager.snapshot();
+    if (!DownloadManager.sameTasks(next, this.tasks)) {
+      this.tasks = next;
+    }
+  }
+
+  private activeTaskCount(tasks: Array<DownloadTask>): number {
+    let count: number = 0;
+    for (let index: number = 0; index < tasks.length; index += 1) {
+      if (tasks[index].status === 'queued' || tasks[index].status === 'downloading') {
+        count += 1;
+      }
+    }
+    return count;
   }
 
   build() {
@@ -165,7 +199,17 @@ export struct DownloadManagerPage {
   }
 
   private async refresh(): Promise<void> {
-    this.tasks = DownloadManager.snapshot();
+    this.applySnapshot();
+    this.lastActiveCount = this.activeTaskCount(this.tasks);
+    await this.refreshCompletedCount();
+  }
+
+  /** Walks every offline manifest, so it only runs on appear and on completion. */
+  private async refreshCompletedCount(): Promise<void> {
+    if (this.isCountBusy) {
+      return;
+    }
+    this.isCountBusy = true;
     try {
       const context: common.UIAbilityContext =
         this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -175,6 +219,8 @@ export struct DownloadManagerPage {
       this.completedCount = records.length;
     } catch (error) {
       this.completedCount = 0;
+    } finally {
+      this.isCountBusy = false;
     }
   }
 }

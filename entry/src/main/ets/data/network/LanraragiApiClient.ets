@@ -12,6 +12,8 @@ import { localized } from '../../common/Localization';
 
 const REQUEST_TIMEOUT_MS: number = 15_000;
 const ARCHIVE_INDEX_TIMEOUT_MS: number = 240_000;
+// A single page image should not hold a reader tile for four minutes.
+const IMAGE_TIMEOUT_MS: number = 60_000;
 
 export class LanraragiApiClient {
   private readonly baseUrl: string;
@@ -41,10 +43,7 @@ export class LanraragiApiClient {
     try {
       const response: http.HttpResponse = await request.request(`${this.baseUrl}/api/info`, {
         method: http.RequestMethod.GET,
-        header: {
-          'Authorization': this.authorizationHeader(),
-          'Accept': 'application/json'
-        },
+        header: this.requestHeaders('application/json'),
         expectDataType: http.HttpDataType.STRING,
         usingCache: false,
         connectTimeout: REQUEST_TIMEOUT_MS,
@@ -73,10 +72,7 @@ export class LanraragiApiClient {
     try {
       const response: http.HttpResponse = await request.request(`${this.baseUrl}/api/archives`, {
         method: http.RequestMethod.GET,
-        header: {
-          'Authorization': this.authorizationHeader(),
-          'Accept': 'application/json'
-        },
+        header: this.requestHeaders('application/json'),
         expectDataType: http.HttpDataType.STRING,
         usingCache: false,
         connectTimeout: REQUEST_TIMEOUT_MS,
@@ -127,10 +123,7 @@ export class LanraragiApiClient {
       const response: http.HttpResponse =
         await request.request(`${this.baseUrl}/api/archives/${archiveId}/files`, {
           method: http.RequestMethod.GET,
-          header: {
-            'Authorization': this.authorizationHeader(),
-            'Accept': 'application/json'
-          },
+          header: this.requestHeaders('application/json'),
           expectDataType: http.HttpDataType.STRING,
           usingCache: false,
           connectTimeout: REQUEST_TIMEOUT_MS,
@@ -175,9 +168,7 @@ export class LanraragiApiClient {
         `${this.baseUrl}/api/archives/${archiveId}/progress/${oneBasedPageNumber}`,
         {
           method: http.RequestMethod.PUT,
-          header: {
-            'Authorization': this.authorizationHeader()
-          },
+          header: this.requestHeaders(''),
           expectDataType: http.HttpDataType.STRING,
           usingCache: false,
           connectTimeout: REQUEST_TIMEOUT_MS,
@@ -207,10 +198,7 @@ export class LanraragiApiClient {
         `${this.baseUrl}/api/archives/${encodeURIComponent(archiveId)}`,
         {
           method: http.RequestMethod.DELETE,
-          header: {
-            'Authorization': this.authorizationHeader(),
-            'Accept': 'application/json'
-          },
+          header: this.requestHeaders('application/json'),
           expectDataType: http.HttpDataType.STRING,
           usingCache: false,
           connectTimeout: REQUEST_TIMEOUT_MS,
@@ -236,22 +224,26 @@ export class LanraragiApiClient {
     pageNumber: number = 0
   ): Promise<ArrayBuffer | undefined> {
     const request: http.HttpRequest = http.createHttp();
-    const requestHeaders: Record<string, string> = {
-      'Authorization': this.authorizationHeader(),
-      'Accept': 'image/*'
-    };
-    if (archiveId.length > 0) {
-      requestHeaders['X-Archive-Id'] = archiveId;
-      requestHeaders['X-Page-Number'] = `${pageNumber}`;
+    // A page URL comes from the server and may be absolute, so it can point
+    // somewhere other than the configured server. Credentials and archive
+    // headers must not follow it off-origin: the LAN API key grants full access
+    // to the server, and plain-http responses can be tampered with on the wire.
+    const sameOrigin: boolean = this.isSameOrigin(imageUrl);
+    const headers: Record<string, string> = this.requestHeaders('image/*', sameOrigin);
+    if (sameOrigin && archiveId.length > 0) {
+      headers['X-Archive-Id'] = archiveId;
+      headers['X-Page-Number'] = `${pageNumber}`;
     }
     try {
       const response: http.HttpResponse = await request.request(imageUrl, {
         method: http.RequestMethod.GET,
-        header: requestHeaders,
+        header: headers,
         expectDataType: http.HttpDataType.ARRAY_BUFFER,
-        usingCache: true,
+        // The app keeps its own deterministic disk cache, so an independent HTTP
+        // cache would only add a second, uninvalidatable copy of each page.
+        usingCache: false,
         connectTimeout: REQUEST_TIMEOUT_MS,
-        readTimeout: ARCHIVE_INDEX_TIMEOUT_MS
+        readTimeout: IMAGE_TIMEOUT_MS
       });
       if (response.responseCode === 202) {
         return undefined;
@@ -278,10 +270,7 @@ export class LanraragiApiClient {
     try {
       const response: http.HttpResponse = await request.request(this.baseUrl + path, {
         method: http.RequestMethod.GET,
-        header: {
-          'Authorization': this.authorizationHeader(),
-          'Accept': 'application/json'
-        },
+        header: this.requestHeaders('application/json'),
         expectDataType: http.HttpDataType.STRING,
         usingCache: false,
         connectTimeout: REQUEST_TIMEOUT_MS,
@@ -306,12 +295,11 @@ export class LanraragiApiClient {
 
   private resolveArchivePageUrl(pagePath: string): string {
     if (pagePath.startsWith('http://') || pagePath.startsWith('https://')) {
+      // Absolute page URLs are passed through so archives stored on another host
+      // keep working, but fetchImage strips credentials for these (see there).
       return pagePath;
     }
-    const schemeEnd: number = this.baseUrl.indexOf('://') + 3;
-    const pathStart: number = this.baseUrl.indexOf('/', schemeEnd);
-    const origin: string =
-      pathStart >= schemeEnd ? this.baseUrl.substring(0, pathStart) : this.baseUrl;
+    const origin: string = this.serverOrigin();
     if (pagePath.startsWith('/')) {
       return origin + pagePath;
     }
@@ -319,9 +307,48 @@ export class LanraragiApiClient {
   }
 
   private authorizationHeader(): string {
+    // A LANraragi server that has no API key configured is accessed without
+    // credentials, and the Base64 helper rejects a zero-length Uint8Array, so an
+    // empty key must not be encoded at all.
+    if (this.apiKey.length === 0) {
+      return '';
+    }
     const encoder: util.TextEncoder = new util.TextEncoder();
     const base64: util.Base64Helper = new util.Base64Helper();
     const encodedKey: string = base64.encodeToStringSync(encoder.encodeInto(this.apiKey));
     return `Bearer ${encodedKey}`;
+  }
+
+  /**
+   * Builds request headers.
+   *
+   * `withAuthorization` is false for requests that leave the configured server's
+   * origin, so the API key is never sent to a host the server merely named.
+   */
+  private requestHeaders(accept: string, withAuthorization: boolean = true): Record<string, string> {
+    const headers: Record<string, string> = {};
+    if (accept.length > 0) {
+      headers['Accept'] = accept;
+    }
+    if (withAuthorization) {
+      const authorization: string = this.authorizationHeader();
+      if (authorization.length > 0) {
+        headers['Authorization'] = authorization;
+      }
+    }
+    return headers;
+  }
+
+  /** The scheme://host[:port] part of the configured server URL. */
+  private serverOrigin(): string {
+    const schemeEnd: number = this.baseUrl.indexOf('://') + 3;
+    const pathStart: number = this.baseUrl.indexOf('/', schemeEnd);
+    return pathStart >= schemeEnd ? this.baseUrl.substring(0, pathStart) : this.baseUrl;
+  }
+
+  /** True when the URL points at the configured server itself. */
+  private isSameOrigin(url: string): boolean {
+    const origin: string = this.serverOrigin();
+    return url === origin || url.startsWith(`${origin}/`);
   }
 }

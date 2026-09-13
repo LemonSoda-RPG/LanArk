@@ -7,6 +7,28 @@ const COVER_CACHE_FOLDER_NAME: string = 'lanark-cover-cache-v2';
 const LEGACY_COVER_CACHE_FOLDER_NAME: string = 'lanark-image-cache';
 const READER_CACHE_FOLDER_NAME: string = 'lanark-reader-cache';
 
+// Guards against allocating from a corrupt or absurd stat result.
+const MAX_CACHED_FILE_BYTES: number = 128 * 1024 * 1024;
+
+/** djb2 hash of the raw value, used to disambiguate sanitised path parts. */
+function pathHash(value: string): string {
+  let hash: number = 5381;
+  for (let index: number = 0; index < value.length; index += 1) {
+    hash = ((hash * 33) ^ value.charCodeAt(index)) >>> 0;
+  }
+  return hash.toString(16);
+}
+
+// Makes temporary write paths unique within the process; `Date.now()` alone
+// collides when two writers target the same cover or page in the same
+// millisecond, and the second open truncates the first writer's file.
+let temporaryWriteSequence: number = 0;
+
+function temporaryWritePath(path: string): string {
+  temporaryWriteSequence += 1;
+  return `${path}.${Date.now()}-${temporaryWriteSequence}.tmp`;
+}
+
 export class ImageCacheStats {
   readonly bytes: number;
   readonly fileCount: number;
@@ -65,20 +87,19 @@ export class ImageDiskCache {
     this.writeFileIfMissing(this.pagePath(archiveId, pageNumber), data);
   }
 
-  stats(): ImageCacheStats {
-    let bytes: number = 0;
-    let fileCount: number = 0;
-    if (this.exists(this.coverRootPath)) {
-      const coverStats: ImageCacheStats = this.collectStats(this.coverRootPath);
-      bytes += coverStats.bytes;
-      fileCount += coverStats.fileCount;
-    }
-    if (this.exists(this.readerRootPath)) {
-      const readerStats: ImageCacheStats = this.collectStats(this.readerRootPath);
-      bytes += readerStats.bytes;
-      fileCount += readerStats.fileCount;
-    }
-    return new ImageCacheStats(bytes, fileCount);
+  /**
+   * Sums the cache contents without blocking the UI thread.
+   *
+   * The synchronous walk used `listFileSync` and `statSync`, one call per file,
+   * so opening the settings page stalled once the cover cache was large.
+   */
+  async statsAsync(): Promise<ImageCacheStats> {
+    const coverStats: ImageCacheStats = await this.collectStatsAsync(this.coverRootPath);
+    const readerStats: ImageCacheStats = await this.collectStatsAsync(this.readerRootPath);
+    return new ImageCacheStats(
+      coverStats.bytes + readerStats.bytes,
+      coverStats.fileCount + readerStats.fileCount
+    );
   }
 
   clearAll(): void {
@@ -135,15 +156,25 @@ export class ImageDiskCache {
         return undefined;
       }
       const size: number = fs.statSync(path).size;
-      if (size <= 0) {
+      if (size <= 0 || size > MAX_CACHED_FILE_BYTES) {
         return undefined;
       }
       const file: fs.File = fs.openSync(path, fs.OpenMode.READ_ONLY);
       try {
         const buffer: ArrayBuffer = new ArrayBuffer(size);
-        const bytesRead: number = fs.readSync(file.fd, buffer);
-        if (bytesRead !== size) {
-          return undefined;
+        // `readSync` is not required to fill the buffer in a single call. A
+        // short read used to be reported as a cache miss, which made an
+        // existing cached page look like it had never been written.
+        let offset: number = 0;
+        while (offset < size) {
+          const read: number = fs.readSync(file.fd, buffer, {
+            offset: offset,
+            length: size - offset
+          });
+          if (read <= 0) {
+            return undefined;
+          }
+          offset += read;
         }
         return buffer;
       } finally {
@@ -160,7 +191,7 @@ export class ImageDiskCache {
     }
     const parentPath: string = path.substring(0, path.lastIndexOf('/'));
     this.ensureDirectory(parentPath);
-    const temporaryPath: string = `${path}.${Date.now()}.tmp`;
+    const temporaryPath: string = temporaryWritePath(path);
     let temporaryExists: boolean = false;
     try {
       const file: fs.File = fs.openSync(
@@ -191,27 +222,27 @@ export class ImageDiskCache {
     }
   }
 
-  private collectStats(path: string): ImageCacheStats {
+  private async collectStatsAsync(path: string): Promise<ImageCacheStats> {
+    let totalBytes: number = 0;
+    let totalFiles: number = 0;
     try {
-      let totalBytes: number = 0;
-      let totalFiles: number = 0;
-      const children: Array<string> = fs.listFileSync(path);
-      children.forEach((name: string) => {
+      const children: Array<string> = await fs.listFile(path);
+      for (const name of children) {
         const childPath: string = `${path}/${name}`;
-        const stat: fs.Stat = fs.statSync(childPath);
+        const stat: fs.Stat = await fs.stat(childPath);
         if (stat.isDirectory()) {
-          const childStats: ImageCacheStats = this.collectStats(childPath);
+          const childStats: ImageCacheStats = await this.collectStatsAsync(childPath);
           totalBytes += childStats.bytes;
           totalFiles += childStats.fileCount;
         } else {
           totalBytes += stat.size;
           totalFiles += 1;
         }
-      });
-      return new ImageCacheStats(totalBytes, totalFiles);
+      }
     } catch (error) {
-      return new ImageCacheStats();
+      // A missing root simply contributes nothing.
     }
+    return new ImageCacheStats(totalBytes, totalFiles);
   }
 
   private removeDirectoryContents(path: string): void {
@@ -311,6 +342,13 @@ export class ImageDiskCache {
       result += isDigit || isUpper || isLower || character === '-' || character === '_' ?
         character : '_';
     }
-    return result.length > 0 ? result : 'unknown';
+    if (result === value) {
+      // Nothing was substituted, so the identifier is already unambiguous.
+      return result.length > 0 ? result : 'unknown';
+    }
+    // The substitution is lossy (`a/b`, `a.b` and `a_b` all become `a_b`), so a
+    // hash of the original keeps distinct archives in distinct directories
+    // without moving the paths of ordinary identifiers.
+    return `${result.length > 0 ? result : 'unknown'}-${pathHash(value)}`;
   }
 }
