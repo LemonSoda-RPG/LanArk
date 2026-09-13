@@ -8,6 +8,28 @@ import {
 
 const OFFLINE_ROOT_FOLDER_NAME: string = 'lanark-offline-archives';
 
+// Makes temporary write paths unique within the process. `Date.now()` alone
+// collides when two writers target the same destination in the same
+// millisecond, and the second open truncates the first writer's file.
+let temporaryWriteSequence: number = 0;
+
+function temporaryWritePath(path: string): string {
+  temporaryWriteSequence += 1;
+  return `${path}.${Date.now()}-${temporaryWriteSequence}.tmp`;
+}
+
+// Guards against allocating from a corrupt or absurd stat result.
+const MAX_CACHED_FILE_BYTES: number = 128 * 1024 * 1024;
+
+/** djb2 hash of the raw value, used to disambiguate sanitised path parts. */
+function pathHash(value: string): string {
+  let hash: number = 5381;
+  for (let index: number = 0; index < value.length; index += 1) {
+    hash = ((hash * 33) ^ value.charCodeAt(index)) >>> 0;
+  }
+  return hash.toString(16);
+}
+
 interface OfflineManifestPayload {
   archive: ArchiveIndexPayload;
   pages: Array<ReaderPagePayload>;
@@ -165,13 +187,27 @@ export class OfflineArchiveCache {
         return undefined;
       }
       const size: number = fs.statSync(path).size;
-      if (size <= 0) {
+      if (size <= 0 || size > MAX_CACHED_FILE_BYTES) {
         return undefined;
       }
       const file: fs.File = fs.openSync(path, fs.OpenMode.READ_ONLY);
       try {
         const buffer: ArrayBuffer = new ArrayBuffer(size);
-        return fs.readSync(file.fd, buffer) === size ? buffer : undefined;
+        // `readSync` is not required to fill the buffer in a single call. A
+        // short read used to be reported as a missing page, which told the user
+        // to re-download an archive that was in fact fully on disk.
+        let offset: number = 0;
+        while (offset < size) {
+          const read: number = fs.readSync(file.fd, buffer, {
+            offset: offset,
+            length: size - offset
+          });
+          if (read <= 0) {
+            return undefined;
+          }
+          offset += read;
+        }
+        return buffer;
       } finally {
         fs.closeSync(file);
       }
@@ -182,7 +218,7 @@ export class OfflineArchiveCache {
 
   private writeBinary(path: string, data: ArrayBuffer): void {
     this.ensureDirectory(path.substring(0, path.lastIndexOf('/')));
-    let temporaryPath: string = `${path}.${Date.now()}.tmp`;
+    let temporaryPath: string = temporaryWritePath(path);
     let temporaryExists: boolean = false;
     try {
       const file: fs.File = fs.openSync(
@@ -214,7 +250,7 @@ export class OfflineArchiveCache {
 
   private writeText(path: string, value: string): void {
     this.ensureDirectory(path.substring(0, path.lastIndexOf('/')));
-    let temporaryPath: string = `${path}.${Date.now()}.tmp`;
+    let temporaryPath: string = temporaryWritePath(path);
     let temporaryExists: boolean = false;
     try {
       const file: fs.File = fs.openSync(
@@ -227,9 +263,9 @@ export class OfflineArchiveCache {
       } finally {
         fs.closeSync(file);
       }
-      if (this.exists(path)) {
-        fs.unlinkSync(path);
-      }
+      // `rename` replaces the destination atomically. Unlinking first would open
+      // a window where a crash destroys the manifest and hides an archive whose
+      // pages are all still on disk.
       fs.renameSync(temporaryPath, path);
       temporaryExists = false;
     } catch (error) {
@@ -299,7 +335,14 @@ export class OfflineArchiveCache {
       result += isDigit || isUpper || isLower || character === '-' || character === '_' ?
         character : '_';
     }
-    return result.length > 0 ? result : 'unknown';
+    if (result === value) {
+      // Nothing was substituted, so the identifier is already unambiguous and
+      // existing directories keep their path.
+      return result.length > 0 ? result : 'unknown';
+    }
+    // The substitution is lossy (`a/b`, `a.b` and `a_b` all become `a_b`), so a
+    // hash of the original keeps distinct archives in distinct directories.
+    return `${result.length > 0 ? result : 'unknown'}-${pathHash(value)}`;
   }
 
   private decodeArchiveDirectory(name: string): string {

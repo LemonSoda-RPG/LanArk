@@ -10,9 +10,10 @@ LanArk is a native HarmonyOS NEXT LANraragi reader written in ArkTS and ArkUI. I
 - List and cover-grid layouts with automatic or fixed grid columns
 - Search, category filtering, and multiple sort modes
 - Reading progress synchronization with immediate local updates
+- Reading-history page ordered by most recent read time, with an in-progress-only filter
 - Single-page, two-page, and continuous reading modes
 - Left-to-right and right-to-left reading directions
-- Tap-to-turn pages, page slider, pinch zoom, and panning
+- Swipe or tap to turn pages in single-page and two-page modes, page slider, pinch zoom, and panning
 - Configurable page preloading
 - In-app offline archive downloads, with per-page progress and resumable partial downloads
 - Downloaded archive library and download manager pages
@@ -144,7 +145,7 @@ The URL must be reachable from the phone or tablet. `localhost` refers to the de
 
 ## Image memory policy
 
-Original encoded page bytes are cached locally for the current reading session. Large pages are decoded to a bounded target size (maximum long edge 4096 px and an estimated 64 MiB RGBA budget) before rendering. This keeps high-resolution pages readable without allocating an unbounded PixelMap. The interpolation option changes display resampling only; it does not disable the fixed decode limits.
+Original encoded page bytes are cached locally and kept across reading sessions, so reopening an archive does not download it again; the system may reclaim the cache under storage pressure. Large pages are decoded to a bounded target size (maximum long edge 4096 px and an estimated 64 MiB RGBA budget) before rendering. This keeps high-resolution pages readable without allocating an unbounded PixelMap. The interpolation option changes display resampling only; it does not disable the fixed decode limits.
 
 ## Data and privacy
 

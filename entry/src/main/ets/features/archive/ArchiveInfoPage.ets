@@ -9,7 +9,7 @@ import {
   ArchiveItem,
   ServerConfig
 } from '../../domain/model/LanraragiModels';
-import { isEnglishSystemLanguage, localized } from '../../common/Localization';
+import { describeUserFacingError, isEnglishSystemLanguage, localized } from '../../common/Localization';
 
 function emptyArchive(): ArchiveItem {
   const payload: ArchiveIndexPayload = {
@@ -41,19 +41,42 @@ export struct ArchiveInfoPage {
   @State private deleteError: string = '';
   @State private downloadTask: DownloadTask | undefined = undefined;
   @State private isDownloaded: boolean = false;
-  private downloadRefreshTimer: number = -1;
+  // `isDownloaded` is only meaningful once a check has actually succeeded. A
+  // failed check must not read as "not downloaded", because that is exactly what
+  // decides whether deleting touches the server copy.
+  @State private isDownloadStateKnown: boolean = false;
+  // Bound once so the same reference can be unregistered.
+  private readonly downloadListener: () => void = (): void => {
+    this.onDownloadChanged();
+  };
 
   aboutToAppear(): void {
     this.refreshDownloadState();
-    this.downloadRefreshTimer = setInterval(() => {
-      this.refreshDownloadState();
-    }, 500);
+    DownloadManager.addChangeListener(this.downloadListener);
   }
 
   aboutToDisappear(): void {
-    if (this.downloadRefreshTimer >= 0) {
-      clearInterval(this.downloadRefreshTimer);
-      this.downloadRefreshTimer = -1;
+    DownloadManager.removeChangeListener(this.downloadListener);
+  }
+
+  /**
+   * Reacts to a download change instead of polling twice a second.
+   *
+   * The snapshot is only reassigned when it actually differs, and the on-disk
+   * state is re-checked once the task stops running, because that is when the
+   * manifest can have appeared. Polling here used to cost a keystore query, a
+   * manifest parse and one stat per page file every 500 ms.
+   */
+  private onDownloadChanged(): void {
+    const next: DownloadTask | undefined = DownloadManager.taskFor(this.archive.id);
+    const changed: boolean = this.downloadTask === undefined || next === undefined ||
+      next.status !== this.downloadTask.status ||
+      next.completedPages !== this.downloadTask.completedPages;
+    if (changed) {
+      this.downloadTask = next;
+    }
+    if (!DownloadManager.isActive(this.archive.id)) {
+      this.refreshDownloadState();
     }
   }
 
@@ -334,6 +357,14 @@ export struct ArchiveInfoPage {
       // This prevents a downloaded archive from falling through to server deletion
       // while the periodic download-state refresh is still running.
       await this.refreshDownloadState();
+      if (DownloadManager.isActive(this.archive.id)) {
+        this.deleteError = localized('该档案正在下载，请先在下载管理中清除任务');
+        return;
+      }
+      if (!this.isDownloadStateKnown && !this.offline) {
+        this.deleteError = localized('无法确认本地下载状态，请稍后重试');
+        return;
+      }
       const result: DeleteDialogResult = await
         (this.getUIContext().getPromptAction().showDialog({
         title: this.isDownloaded || this.offline ?
@@ -344,8 +375,8 @@ export struct ArchiveInfoPage {
             `“${this.archive.title}” will be permanently deleted from the server. Files and metadata cannot be recovered.` :
             `“${this.archive.title}”将从服务器永久删除，文件和元数据均无法恢复。`),
         buttons: [
-          { text: localized('取消'), color: '#5D6B7A' },
-          { text: localized('删除'), color: '#C43E3E' }
+          { text: localized('取消'), color: $r('app.color.text_secondary') },
+          { text: localized('删除'), color: $r('app.color.error') }
         ]
       }) as Promise<DeleteDialogResult>);
       if (result.index !== 1) {
@@ -365,7 +396,7 @@ export struct ArchiveInfoPage {
         this.getUIContext().getHostContext() as common.UIAbilityContext;
       if (this.offline && this.offlineServerUrl.length > 0) {
         new OfflineArchiveCache(context, this.offlineServerUrl).clearArchive(this.archive.id);
-        DownloadManager.forget(this.archive.id);
+        await DownloadManager.forget(this.archive.id);
         await new OfflineProgressRepository(context).clear(this.archive.id);
         this.isDownloaded = false;
         this.onLocalDownloadDeleted(this.archive.id);
@@ -376,17 +407,23 @@ export struct ArchiveInfoPage {
         const storageServerUrl: string = this.offlineServerUrl.length > 0 ?
           this.offlineServerUrl : config.serverUrl;
         new OfflineArchiveCache(context, storageServerUrl).clearArchive(this.archive.id);
-        DownloadManager.forget(this.archive.id);
+        await DownloadManager.forget(this.archive.id);
         await new OfflineProgressRepository(context).clear(this.archive.id);
         this.isDownloaded = false;
         this.onLocalDownloadDeleted(this.archive.id);
+        return;
+      }
+      // Never fall through to deleting the server copy while the local state is
+      // unknown or a download is still writing files for this archive.
+      if (DownloadManager.isActive(this.archive.id) || !this.isDownloadStateKnown) {
+        this.deleteError = localized('无法确认本地下载状态，请稍后重试');
         return;
       }
       const client: LanraragiApiClient =
         new LanraragiApiClient(config.serverUrl, config.apiKey);
       await client.deleteArchive(this.archive.id);
       new OfflineArchiveCache(context, config.serverUrl).clearArchive(this.archive.id);
-      DownloadManager.forget(this.archive.id);
+      await DownloadManager.forget(this.archive.id);
       await new OfflineProgressRepository(context).clear(this.archive.id);
       this.onArchiveDeleted(this.archive.id);
     } catch (error) {
@@ -433,12 +470,12 @@ export struct ArchiveInfoPage {
       const config: ServerConfig = await this.repository().load();
       const storageServerUrl: string = this.offlineServerUrl.length > 0 ?
         this.offlineServerUrl : config.serverUrl;
-      if (storageServerUrl.length > 0) {
-        this.isDownloaded = new OfflineArchiveCache(context, storageServerUrl)
-          .isDownloaded(this.archive.id);
-      }
+      this.isDownloaded = storageServerUrl.length > 0 &&
+        new OfflineArchiveCache(context, storageServerUrl).isDownloaded(this.archive.id);
+      this.isDownloadStateKnown = storageServerUrl.length > 0;
     } catch (error) {
-      this.isDownloaded = false;
+      // A failed check leaves the state unknown rather than "not downloaded".
+      this.isDownloadStateKnown = false;
     }
   }
 
@@ -450,9 +487,6 @@ export struct ArchiveInfoPage {
   }
 
   private describeError(error: Object): string {
-    if (error instanceof Error && error.message.length > 0) {
-      return error.message;
-    }
-    return localized('删除档案失败');
+    return describeUserFacingError(error, localized('删除档案失败'));
   }
 }

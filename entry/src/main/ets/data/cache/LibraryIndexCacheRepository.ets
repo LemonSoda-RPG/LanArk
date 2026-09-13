@@ -9,6 +9,15 @@ import {
 
 const INDEX_FOLDER_NAME: string = 'lanark-library-index';
 
+// Makes temporary write paths unique within the process; `Date.now()` alone
+// collides when two writers target the same file in the same millisecond.
+let temporaryWriteSequence: number = 0;
+
+function temporaryWritePath(path: string): string {
+  temporaryWriteSequence += 1;
+  return `${path}.${Date.now()}-${temporaryWriteSequence}.tmp`;
+}
+
 interface LibraryIndexPayload {
   archives: Array<ArchiveIndexPayload>;
   categories: Array<CategoryPayload>;
@@ -72,7 +81,7 @@ export class LibraryIndexCacheRepository {
         categories: categories.map((category: CategoryItem) => category.toPayload()),
         savedAt: Date.now()
       };
-      temporaryPath = `${this.filePath}.${Date.now()}.tmp`;
+      temporaryPath = temporaryWritePath(this.filePath);
       const file: fs.File = fs.openSync(
         temporaryPath,
         fs.OpenMode.CREATE | fs.OpenMode.READ_WRITE | fs.OpenMode.TRUNC
@@ -83,9 +92,8 @@ export class LibraryIndexCacheRepository {
       } finally {
         fs.closeSync(file);
       }
-      if (this.exists(this.filePath)) {
-        fs.unlinkSync(this.filePath);
-      }
+      // `rename` replaces the destination atomically. Unlinking first would open
+      // a window where a crash leaves no index file at all.
       fs.renameSync(temporaryPath, this.filePath);
       temporaryExists = false;
     } catch (error) {

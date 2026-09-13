@@ -14,7 +14,7 @@ import {
 import { ServerConfigRepository } from '../../data/config/ServerConfigRepository';
 import { LanraragiApiClient } from '../../data/network/LanraragiApiClient';
 import { ServerConfig, ServerProfile } from '../../domain/model/LanraragiModels';
-import { localized } from '../../common/Localization';
+import { describeUserFacingError, localized } from '../../common/Localization';
 
 interface CacheDialogResult {
   index: number;
@@ -51,6 +51,9 @@ export struct SettingsPage {
   @State private serverMessage: string = '';
   @State private serverMessageIsError: boolean = false;
   @State private readerMessage: string = '';
+  @State private readerMessageIsError: boolean = false;
+  @State private libraryMessage: string = '';
+  @State private libraryMessageIsError: boolean = false;
   @State private cacheSizeText: string = localized('正在统计…', 'Calculating…');
   @State private cacheFileCount: number = 0;
   @State private isCacheBusy: boolean = false;
@@ -59,7 +62,7 @@ export struct SettingsPage {
 
   aboutToAppear(): void {
     this.loadSettings();
-    this.refreshCacheStats();
+    this.refreshCacheStats().catch(() => {});
   }
 
   build() {
@@ -287,6 +290,15 @@ export struct SettingsPage {
   private librarySection() {
     Column({ space: 10 }) {
       this.sectionTitle(localized('书库设置'), localized('筛选与布局会自动保存'))
+
+      if (this.libraryMessage.length > 0) {
+        Text(this.libraryMessage)
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(12)
+          .fontColor(this.libraryMessageIsError ?
+            $r('app.color.error') : $r('app.color.success'))
+          .width('100%')
+      }
 
       Row({ space: 12 }) {
         Column({ space: 3 }) {
@@ -593,69 +605,12 @@ export struct SettingsPage {
 
       Divider().color($r('app.color.divider'))
 
-      Row({ space: 12 }) {
-        Column({ space: 3 }) {
-          Text(localized('点击区域翻页'))
-            .copyOption(CopyOptions.LocalDevice)
-            .fontSize(15)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_primary'))
-            .width('100%')
-          Text(localized('点击屏幕左右两侧翻页，中间显示或隐藏页码栏'))
-            .copyOption(CopyOptions.LocalDevice)
-            .fontSize(12)
-            .lineHeight(17)
-            .fontColor($r('app.color.text_tertiary'))
-            .width('100%')
-        }
-        .layoutWeight(1)
-
-        Toggle({ type: ToggleType.Switch, isOn: true })
-          .selectedColor($r('app.color.accent'))
-          .onChange((value: boolean) => {
-            this.saveReaderSettings();
-          })
-      }
-      .width('100%')
-      .height(66)
-      .padding({ top: 8, bottom: 8 })
-      .visibility(Visibility.None)
-
-      Divider().color($r('app.color.divider')).visibility(Visibility.None)
-
-      Row({ space: 12 }) {
-        Column({ space: 3 }) {
-          Text(localized('进入时显示页码栏'))
-            .copyOption(CopyOptions.LocalDevice)
-            .fontSize(15)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_primary'))
-            .width('100%')
-          Text(localized('打开档案时先显示页码与拖拽进度条'))
-            .copyOption(CopyOptions.LocalDevice)
-            .fontSize(12)
-            .lineHeight(17)
-            .fontColor($r('app.color.text_tertiary'))
-            .width('100%')
-        }
-        .layoutWeight(1)
-
-        Toggle({ type: ToggleType.Switch, isOn: false })
-          .selectedColor($r('app.color.accent'))
-          .onChange((value: boolean) => {
-            this.saveReaderSettings();
-          })
-      }
-      .width('100%')
-      .height(66)
-      .padding({ top: 8, bottom: 8 })
-      .visibility(Visibility.None)
-
       if (this.readerMessage.length > 0) {
         Text(this.readerMessage)
           .copyOption(CopyOptions.LocalDevice)
           .fontSize(12)
-          .fontColor($r('app.color.success'))
+          .fontColor(this.readerMessageIsError ?
+            $r('app.color.error') : $r('app.color.success'))
           .width('100%')
           .padding({ top: 6 })
       }
@@ -670,7 +625,7 @@ export struct SettingsPage {
   @Builder
   private cacheSection() {
     Column({ space: 14 }) {
-      this.sectionTitle(localized('图片缓存'), localized('封面长期保存，阅读页退出档案后自动删除'))
+      this.sectionTitle(localized('图片缓存'), localized('封面与阅读页都会保留在本机，系统空间紧张时可能自动回收'))
 
       Row({ space: 12 }) {
         Column({ space: 4 }) {
@@ -700,7 +655,7 @@ export struct SettingsPage {
       }
       .width('100%')
 
-      Text(localized('阅读页只在当前阅读期间缓存；退出档案后自动释放。清理操作不会影响服务器档案、进度和连接配置。'))
+      Text(localized('封面和阅读页都会保留在本机，重开同一档案时无需重新下载。清理操作不会影响服务器档案、进度和连接配置。'))
         .copyOption(CopyOptions.LocalDevice)
         .fontSize(12)
         .lineHeight(18)
@@ -817,8 +772,8 @@ export struct SettingsPage {
           title: localized('删除当前服务器'),
           message: localized('确认删除当前服务器？'),
           buttons: [
-            { text: localized('取消'), color: '#5D6B7A' },
-            { text: localized('删除'), color: '#C43E3E' }
+            { text: localized('取消'), color: $r('app.color.text_secondary') },
+            { text: localized('删除'), color: $r('app.color.error') }
           ]
         }) as Promise<CacheDialogResult>);
       if (result.index !== 1) {
@@ -849,9 +804,9 @@ export struct SettingsPage {
     }
   }
 
-  private refreshCacheStats(): void {
+  private async refreshCacheStats(): Promise<void> {
     try {
-      const stats: ImageCacheStats = this.imageCache().stats();
+      const stats: ImageCacheStats = await this.imageCache().statsAsync();
       this.cacheSizeText = this.formatBytes(stats.bytes);
       this.cacheFileCount = stats.fileCount;
       this.cacheMessageIsError = false;
@@ -870,8 +825,8 @@ export struct SettingsPage {
           title: localized('清空图片缓存？'),
           message: localized('只会删除手机本地的封面和阅读页副本，下次查看时会重新从服务器加载。'),
           buttons: [
-            { text: localized('取消'), color: '#5D6B7A' },
-            { text: localized('清空'), color: '#C43E3E' }
+            { text: localized('取消'), color: $r('app.color.text_secondary') },
+            { text: localized('清空'), color: $r('app.color.error') }
           ]
         }) as Promise<CacheDialogResult>);
       if (result.index === 1) {
@@ -897,7 +852,7 @@ export struct SettingsPage {
     } catch (error) {
       this.cacheMessageIsError = true;
       this.cacheMessage = localized('清空缓存失败，请稍后重试');
-      this.refreshCacheStats();
+      this.refreshCacheStats().catch(() => {});
     } finally {
       this.isCacheBusy = false;
     }
@@ -953,6 +908,25 @@ export struct SettingsPage {
     if (this.isServerBusy) {
       return;
     }
+    // This is the most damaging action on the page: it removes every saved
+    // server and every API key, and the keys cannot be recovered from the
+    // device, so it confirms like the other destructive actions do.
+    try {
+      const result: CacheDialogResult = await
+        (this.getUIContext().getPromptAction().showDialog({
+          title: localized('清除本机配置？'),
+          message: localized('将删除本机保存的所有服务器地址和 API Key，服务器上的档案不会受影响。'),
+          buttons: [
+            { text: localized('取消'), color: $r('app.color.text_secondary') },
+            { text: localized('清除'), color: $r('app.color.error') }
+          ]
+        }) as Promise<CacheDialogResult>);
+      if (result.index !== 1) {
+        return;
+      }
+    } catch (error) {
+      return;
+    }
     this.isServerBusy = true;
     this.serverMessage = '';
     try {
@@ -976,8 +950,10 @@ export struct SettingsPage {
   private async saveReaderSettings(): Promise<void> {
     try {
       await this.readerRepository().save(this.currentReaderSettings());
+      this.readerMessageIsError = false;
       this.readerMessage = localized('阅读设置已保存');
     } catch (error) {
+      this.readerMessageIsError = true;
       this.readerMessage = localized('阅读设置保存失败');
     }
   }
@@ -994,8 +970,11 @@ export struct SettingsPage {
       );
       await this.libraryRepository().save(updated);
       this.onLibrarySettingsSaved(updated);
+      this.libraryMessageIsError = false;
+      this.libraryMessage = localized('书库设置已保存');
     } catch (error) {
-      this.readerMessage = localized('书库设置保存失败');
+      this.libraryMessageIsError = true;
+      this.libraryMessage = localized('书库设置保存失败');
     }
   }
 
@@ -1106,9 +1085,6 @@ export struct SettingsPage {
   }
 
   private describeError(error: Object): string {
-    if (error instanceof Error && error.message.length > 0) {
-      return error.message;
-    }
-    return localized('操作失败，请检查网络和输入内容');
+    return describeUserFacingError(error, localized('操作失败，请检查网络和输入内容'));
   }
 }

@@ -142,20 +142,23 @@ export class ServerConfigRepository {
       const activeValue: preferences.ValueType = await store.get(ACTIVE_PROFILE_KEY, '');
       const activeId: string = typeof activeValue === 'string' ? activeValue : '';
       const target: ServerProfile = profiles[targetIndex];
-      await this.removeApiKey(this.profileAlias(target.id));
       profiles.splice(targetIndex, 1);
       if (profiles.length === 0) {
-        await this.removeApiKey(LEGACY_API_KEY_ALIAS);
         await store.delete(SERVER_PROFILES_KEY);
         await store.delete(ACTIVE_PROFILE_KEY);
         await store.delete(SERVER_URL_KEY);
         await store.flush();
+        // Keys are removed only after the reduced list is persisted, so a
+        // failure here cannot leave a stored profile without its credential.
+        await this.removeApiKey(this.profileAlias(target.id));
+        await this.removeApiKey(LEGACY_API_KEY_ALIAS);
         return;
       }
       const nextActive: string = activeId === target.id || activeId.length === 0
         ? profiles[0].id
         : activeId;
       await this.persistProfiles(profiles, nextActive);
+      await this.removeApiKey(this.profileAlias(target.id));
     } catch (error) {
       throw new Error(`${localized('删除服务器失败：', 'Failed to delete server: ')}${this.errorMessage(error)}`);
     }
