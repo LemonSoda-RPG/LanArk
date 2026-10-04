@@ -100,8 +100,7 @@ class ArchiveDataSource implements IDataSource {
       this.items.push(more[index]);
     }
     this.listeners.forEach((listener: DataChangeListener) => {
-      // `onDataAdd` is the current name; `onDataAdded` was deprecated in API 8.
-      listener.onDataAdd(first);
+      listener.onDataAdded(first);
     });
   }
 
@@ -206,14 +205,6 @@ struct Index {
   // Lazy loading: the client holds only the pages fetched so far, and asks for
   // the next one when the user reaches the end. Ordering, filtering and search
   // are server-side, so a partial list is still a correct answer.
-  /**
-   * Identifies the current listing request.
-   *
-   * Bumped whenever the query changes so a page that arrives late can tell it
-   * belongs to a listing the user has already replaced, and is dropped instead
-   * of being appended to the new one.
-   */
-  private libraryRequestId: number = 0;
   private loadedCount: number = 0;
   // Shown in the header, so it has to be observable: the server reports this
   // total with every page, and it is what the header describes.
@@ -905,9 +896,8 @@ struct Index {
       this.isSortPopupVisible = false;
       this.saveLibrarySettings();
       // The order is the server's, so changing it means fetching again from the
-      // first page rather than reordering what happens to be loaded. The search
-      // text is kept: reordering the results of a search should not drop it.
-      this.reloadLibrary(false);
+      // first page rather than reordering what happens to be loaded.
+      this.reloadLibrary();
     })
   }
 
@@ -1082,7 +1072,7 @@ struct Index {
     }
   }
 
-  private async reloadLibrary(resetView: boolean = true): Promise<void> {
+  private async reloadLibrary(): Promise<void> {
     if (this.serverUrl.length === 0) {
       this.libraryError = localized('请先在设置中配置服务器');
       return;
@@ -1090,7 +1080,7 @@ struct Index {
     try {
       const client: LanraragiApiClient =
         new LanraragiApiClient(this.serverUrl, this.apiKey);
-      await this.loadLibrary(client, false, resetView);
+      await this.loadLibrary(client, false);
     } catch (error) {
       this.libraryError = this.describeError(error);
     }
@@ -1145,13 +1135,9 @@ struct Index {
       this.selectedCategoryName = '全部';
       this.searchText = '';
     }
-    // A new listing always starts from the first page. `totalCount` is left
-    // alone for a silent refresh so the header keeps describing the library
-    // while the new listing is on its way, instead of dropping to zero.
+    // A new listing always starts from the first page.
     this.loadedCount = 0;
-    if (resetView) {
-      this.totalCount = 0;
-    }
+    this.totalCount = 0;
     const hadContent: boolean = this.completeArchiveIndex.length > 0;
     if (!silent) {
       this.libraryError = '';
@@ -1163,7 +1149,6 @@ struct Index {
       }
     }
     let failure: string = '';
-    const requestId: number = ++this.libraryRequestId;
     let firstPage: ArchiveIndexPageResult = new ArchiveIndexPageResult([], 0);
     let loadedCategories: Array<CategoryItem> = this.categories;
     const sortBy: string = this.serverSortKey();
@@ -1178,10 +1163,6 @@ struct Index {
         loadedCategories = await client.fetchCategories();
       } catch (error) {
         // Keep the last local category list if only the category request fails.
-      }
-      if (requestId !== this.libraryRequestId) {
-        // Another listing was started while this one was in flight.
-        return;
       }
       await this.installLibrary(firstPage, loadedCategories, silent, sortBy, descending, filter,
         categoryId);
@@ -1276,7 +1257,6 @@ struct Index {
       this.serverUrl.length === 0) {
       return;
     }
-    const requestId: number = this.libraryRequestId;
     this.isLoadingMore = true;
     // Shown for the whole fetch and held briefly afterwards (see the constant),
     // so it is visible even when the page comes back almost immediately.
@@ -1287,12 +1267,6 @@ struct Index {
       const page: ArchiveIndexPageResult = await client.fetchArchiveIndexPage(
         this.loadedCount, this.pageSize(), this.serverSortKey(),
         !this.sortAscending, this.searchText.trim(), this.selectedCategoryId);
-      if (requestId !== this.libraryRequestId) {
-        // The listing was replaced while this page was loading, so its rows
-        // belong to a query the user has already moved on from.
-        AppLog.detail('library', `dropped page for stale request ${requestId}`);
-        return;
-      }
       this.appendPage(page);
     } catch (error) {
       AppLog.warn('library', `page at ${this.loadedCount} failed: ${AppLog.describe(error)}`);
@@ -1405,31 +1379,6 @@ struct Index {
     .borderRadius(14)
     .margin({ bottom: 12 })
     .transition(TransitionEffect.OPACITY.animation({ duration: 220, curve: Curve.EaseOut }))
-  }
-
-  /**
-   * Cancels anything still scheduled for this page.
-   *
-   * Two of the timers only redraw or debounce a query, so dropping them is
-   * enough. The progress one is a pending disk write: clearing it without
-   * flushing would lose the last page turn of the session, so it is written out
-   * here instead.
-   */
-  aboutToBeDeleted(): void {
-    if (this.indicatorDelayTimer >= 0) {
-      clearTimeout(this.indicatorDelayTimer);
-      this.indicatorDelayTimer = -1;
-    }
-    if (this.searchDebounceTimer >= 0) {
-      clearTimeout(this.searchDebounceTimer);
-      this.searchDebounceTimer = -1;
-    }
-    if (this.progressPersistTimer >= 0) {
-      clearTimeout(this.progressPersistTimer);
-      this.progressPersistTimer = -1;
-      this.progressOverlayRepository().save(this.pendingProgress, this.pendingReadTimes)
-        .catch(() => {});
-    }
   }
 
   private showToast(message: string): void {
@@ -1576,16 +1525,6 @@ struct Index {
       }
       this.selectedCategoryId = categoryId;
       this.selectedCategoryName = categoryName;
-      // This view comes from a category listing that was already fetched in full
-      // (`start=-1`), so there is nothing left to page in. Leaving the counters
-      // describing the previous full-library view made the end of the list look
-      // reachable, and the "next page" then appended rows that were already on
-      // screen — duplicate ids, and duplicate LazyForEach keys with them.
-      this.loadedCount = this.allArchives.length;
-      this.totalCount = this.allArchives.length;
-      // Served whole, so any page request still in flight for the previous view
-      // must not be appended here.
-      this.libraryRequestId += 1;
       this.applyArchiveFilter();
     } catch (error) {
       this.libraryError = this.describeError(error);
@@ -1684,33 +1623,37 @@ struct Index {
   }
 
   private sortModeLabels(): Array<string> {
-    // One entry per `serverSortKey` case, in the same order: the index selected
-    // here is what that switch maps to a `sortby` value. Progress, read state,
-    // isnew and a local shuffle are not offered because none of them can be
-    // expressed as a server-side order, and the list is paged.
     return [
       localized('添加时间'),
       localized('标题'),
       localized('页数'),
+      localized('阅读进度'),
+      localized('阅读状态'),
+      localized('NEW 状态'),
       localized('艺术家'),
       localized('团体'),
       localized('活动'),
       localized('系列'),
       localized('角色'),
-      localized('原作')
+      localized('原作'),
+      localized('随机')
     ];
   }
 
-  /** The name of the sort currently applied, for the toolbar's label. */
+  /**
+   * Stable random rank for one archive.
+   *
+   * The server only sorts by title or last read time, so "Random" is a local
+   * shuffle. Ranks are drawn on first use and cached, which keeps the ordering
+   * stable while searching or switching category instead of reshuffling on
+   * every redraw.
+   */
+
+
   private sortModeLabel(): string {
     const labels: Array<string> = this.sortModeLabels();
-    const index: number = this.sortModeIndex;
-    if (index < 0 || index >= labels.length) {
-      return labels[0];
-    }
-    return labels[index];
+    return labels[this.sortModeIndex] ?? labels[0];
   }
-
 
   private async refreshLibraryWindowSize(): Promise<void> {
     try {
