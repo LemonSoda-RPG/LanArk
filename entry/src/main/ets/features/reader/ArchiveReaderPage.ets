@@ -9,16 +9,21 @@ import {
   ReaderSettingsRepository
 } from '../../data/config/ReaderSettingsRepository';
 import { ServerConfigRepository } from '../../data/config/ServerConfigRepository';
-import { LanraragiApiClient } from '../../data/network/LanraragiApiClient';
+import {
+  ImageProgressCallback,
+  LanraragiApiClient
+} from '../../data/network/LanraragiApiClient';
 import {
   ArchiveIndexPayload,
   ArchiveInfoRouteParams,
   ArchiveItem,
+  ArchivePagesResult,
   ReaderPage,
   ReaderRouteParams,
   ServerConfig
 } from '../../domain/model/LanraragiModels';
 import { describeUserFacingError, localized } from '../../common/Localization';
+import { AppLog } from '../../data/log/AppLog';
 
 // Keep the decoded page at a useful reading resolution instead of decoding an
 // arbitrarily large source image and asking the renderer to shrink it later.
@@ -45,6 +50,75 @@ const READER_CONTROLS_BAR_HEIGHT: number = 100;
 // A swipe slides to the next page over this duration (the Swiper's own
 // transition timing); taps and slider moves stay instantaneous.
 const READER_PAGE_TURN_DURATION_MS: number = 300;
+// A cached page still has to be decoded, so it announces a loading state before
+// the decode completes even though nothing is downloaded.
+const READER_CACHED_PAGE_BYTES: number = 1;
+// A page the reader is only preloading waits this long, times its distance from
+// the current page, before it starts downloading. Every page of a document used
+// to start at once, so the page the user was actually looking at competed for
+// the connection with three to five pages behind it. The delay is invisible for
+// a page that is off screen, and the current page never waits.
+const READER_PRELOAD_STAGGER_MS: number = 150;
+// Waiting for an on-demand extraction: how long between polls, and how many.
+// Two minutes of patience covers a large archive on slow hardware without
+// holding the reader on a spinner forever.
+const READER_EXTRACT_RETRY_DELAY_MS: number = 2500;
+const READER_EXTRACT_RETRY_LIMIT: number = 48;
+
+/** How far a page has got towards being displayed. */
+export enum ReaderPageLoadState {
+  Loading = 0,
+  Loaded = 1,
+  Failed = 2
+}
+
+/**
+ * Encoding of an image buffer, read from its magic bytes.
+ *
+ * This is what separates "the server sent WebP" from "the server sent an HTML
+ * error page" in a log: both fail to decode, and without the container format a
+ * bug report cannot be acted on.
+ */
+function describeImageFormat(buffer: ArrayBuffer): string {
+  const head: Uint8Array = new Uint8Array(buffer.slice(0, 16));
+  if (head.length >= 12 && head[0] === 0x52 && head[1] === 0x49 && head[2] === 0x46 &&
+    head[3] === 0x46 && head[8] === 0x57 && head[9] === 0x45 && head[10] === 0x42) {
+    return head[12] === 0x56 && head[13] === 0x50 && head[14] === 0x38 &&
+      head[15] === 0x58 ? 'webp(lossless)' : 'webp';
+  }
+  if (head.length >= 3 && head[0] === 0xFF && head[1] === 0xD8 && head[2] === 0xFF) {
+    return 'jpeg';
+  }
+  if (head.length >= 8 && head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4E &&
+    head[3] === 0x47) {
+    return 'png';
+  }
+  if (head.length >= 4 && head[0] === 0x47 && head[1] === 0x49 && head[2] === 0x46) {
+    return 'gif';
+  }
+  if (head.length >= 2 && head[0] === 0x42 && head[1] === 0x4D) {
+    return 'bmp';
+  }
+  // A document served in place of an image is a common failure, and naming it
+  // saves a round trip.
+  if (head.length >= 15 && head[0] === 0x3C) {
+    return 'html-or-xml';
+  }
+  return `unknown(${Array.from(head.slice(0, 4)).map((b: number) => b.toString(16).padStart(2, '0')).join(' ')})`;
+}
+
+/** Compact byte count for the loading readout, e.g. `1.2 MB`. */
+function formatBytes(bytes: number): string {  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return '0 B';
+  }
+  if (bytes < 1024) {
+    return `${Math.round(bytes)} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 function readerDecodeSize(info: image.ImageInfo): image.Size | undefined {
   const sourceWidth: number = Math.max(Math.floor(info.size.width), 1);
@@ -180,7 +254,18 @@ struct ReaderImageView {
   // avoids scaling the List viewport itself.
   @Prop contentWidthPercent: number = 100;
   @Prop interpolationIndex: number = 3;
+  // Pages outside this window are neither waiting nor preloading, so they never
+  // report: a waterfall list keeps hundreds of children alive and a rebuild per
+  // finished page would be pure noise. The window moves as the reader turns
+  // pages, so a page decoded while it was outside reports again when it enters.
+  @Prop @Watch('onReportWindowChanged') reportWindowStart: number = 1;
+  @Prop @Watch('onReportWindowChanged') reportWindowEnd: number = 1;
+  // Set by the parent for the page being displayed. Decides whether this page
+  // skips the download queue, so it is read before the report window settles.
+  @Prop pageIsCurrent: boolean = false;
   onZoomChanged: (scale: number) => void = (scale: number): void => {};
+  onLoadStateChanged: (pageNumber: number, state: ReaderPageLoadState) => void =
+    (pageNumber: number, state: ReaderPageLoadState): void => {};
   @State private pixelMap: image.PixelMap | undefined = undefined;
   @State private isLoading: boolean = false;
   @State private errorMessage: string = '';
@@ -188,16 +273,54 @@ struct ReaderImageView {
   @State private zoomScale: number = 1;
   @State private viewportWidth: number = 1;
   @State private viewportHeight: number = 1;
+  @State private progressReceived: number = 0;
+  @State private progressTotal: number = 0;
   // Set when the component is destroyed; a decode still awaiting at that point
   // would otherwise assign `pixelMap` after the only release ran.
   private destroyed: boolean = false;
+  // Pending preload delay, or -1. Cleared with the component so a page that is
+  // scrolled away never starts a download it no longer needs.
+  private preloadTimer: number = -1;
 
   aboutToAppear(): void {
-    this.loadImage();
+    this.scheduleLoad();
+  }
+
+  /**
+   * Starts this page's download, unless it is only being preloaded.
+   *
+   * A preloaded page gives the current one a head start: it waits a moment that
+   * grows with its distance from the current page, so the reader's own requests
+   * are sent and answered first. Opening the page while it waits loads it
+   * immediately, and the pending timer is cancelled with the component.
+   */
+  private scheduleLoad(): void {
+    if (!this.isPreloadedPage()) {
+      this.loadImage();
+      return;
+    }
+    const distance: number = Math.max(this.page.pageNumber - this.reportWindowStart, 1);
+    try {
+      this.preloadTimer = setTimeout(() => {
+        this.preloadTimer = -1;
+        this.loadImage();
+      }, READER_PRELOAD_STAGGER_MS * distance);
+    } catch (error) {
+      // Without a timer the page waits for its turn in the list instead.
+    }
+  }
+
+  /** True for a page that is only fetched ahead of the current one. */
+  private isPreloadedPage(): boolean {
+    return this.reportWindowStart > 0 && this.page.pageNumber > this.reportWindowStart;
   }
 
   aboutToBeDeleted(): void {
     this.destroyed = true;
+    if (this.preloadTimer >= 0) {
+      clearTimeout(this.preloadTimer);
+      this.preloadTimer = -1;
+    }
     this.releasePageImage();
   }
 
@@ -281,10 +404,16 @@ struct ReaderImageView {
             .width(42)
             .height(42)
             .color(Color.White)
-          Text(`${localized('正在加载第')} ${this.page.pageNumber} ${localized('页', 'page')}`)
+          Text(localized(`正在加载第 ${this.page.pageNumber} 页`,
+            `Loading page ${this.page.pageNumber}`))
             .copyOption(CopyOptions.LocalDevice)
             .fontSize(14)
             .fontColor('#D9FFFFFF')
+          // A cached page reports a byte count too, so the decode phase of a
+          // large page shows a readout instead of only a spinner.
+          if (this.progressReceived > 0) {
+            this.percentProgress()
+          }
         }
       } else {
         Column({ space: 12 }) {
@@ -304,6 +433,54 @@ struct ReaderImageView {
     }
     .width('100%')
     .height('100%')
+  }
+
+  @Builder
+  private percentProgress() {
+    Column({ space: 7 }) {
+      Row() {
+        Text(this.progressPercent() >= 100 ?
+          localized('正在解码…') : localized('正在下载…'))
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(12)
+          .fontColor('#B3FFFFFF')
+          .layoutWeight(1)
+
+        Text(`${this.progressPercent()}%`)
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(12)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Color.White)
+      }
+      .width('100%')
+
+      Progress({
+        value: this.progressReceived,
+        total: this.progressTotal,
+        type: ProgressType.Linear
+      })
+        .width('100%')
+        .height(4)
+        .color('#FF3F7CFF')
+        .backgroundColor('#40FFFFFF')
+
+      Text(`${formatBytes(this.progressReceived)} / ${formatBytes(this.progressTotal)}`)
+        .copyOption(CopyOptions.LocalDevice)
+        .fontSize(11)
+        .fontColor('#99FFFFFF')
+        .width('100%')
+        .textAlign(TextAlign.End)
+    }
+    .width(230)
+  }
+
+  private progressPercent(): number {
+    if (this.progressTotal <= 0) {
+      // Bytes are already here — the page came from the cache — so nothing is
+      // left but the decode. `READER_CACHED_PAGE_BYTES` is what marks that.
+      return this.progressReceived > 0 ? 100 : 0;
+    }
+    return Math.min(Math.round(this.progressReceived / this.progressTotal * 100), 100);
   }
 
   private shouldFitDoublePageByWidth(): boolean {
@@ -327,11 +504,20 @@ struct ReaderImageView {
   }
 
   private async loadImage(): Promise<void> {
-    if (this.isLoading || this.page.path.length === 0) {
+    // Reached either right away for the current page, or after the preload
+    // delay. Either way the wait is over now.
+    if (this.preloadTimer >= 0) {
+      clearTimeout(this.preloadTimer);
+      this.preloadTimer = -1;
+    }
+    if (this.isLoading || this.destroyed || this.page.path.length === 0) {
       return;
     }
     this.isLoading = true;
     this.errorMessage = '';
+    this.progressReceived = 0;
+    this.progressTotal = 0;
+    this.reportLoadState(ReaderPageLoadState.Loading);
     try {
       const context: common.UIAbilityContext =
         this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -352,8 +538,31 @@ struct ReaderImageView {
         }
         const client: LanraragiApiClient =
           new LanraragiApiClient(this.serverUrl, this.apiKey);
-        buffer = await client.fetchArchivePage(this.page, this.archiveId);
+        buffer = await client.fetchArchivePage(
+          this.page,
+          this.archiveId,
+          (receivedBytes: number, totalBytes: number): void => {
+            // The request outlives this component: the progress callback can
+            // fire after the page was scrolled away, and writing @State then
+            // would wake a destroyed component for the rest of the download.
+            if (this.destroyed) {
+              return;
+            }
+            this.progressReceived = receivedBytes;
+            this.progressTotal = totalBytes;
+          },
+          // `priority` means "this is the page being read": it skips the queue.
+          // Taken from the parent rather than from the report window, which can
+          // still hold its initial value during the first `aboutToAppear`.
+          this.pageIsCurrent
+        );
         shouldCache = buffer !== undefined;
+      } else {
+        // A cached page is still decoded, which is the whole wait for a large
+        // one on a slow device. Its bytes count as complete, so the readout says
+        // the remaining wait is the decode.
+        this.progressReceived = READER_CACHED_PAGE_BYTES;
+        this.progressTotal = 0;
       }
       if (buffer === undefined) {
         throw new Error(localized('服务器暂未生成该页面'));
@@ -364,6 +573,11 @@ struct ReaderImageView {
         if (imageInfo.size.width > 0 && imageInfo.size.height > 0) {
           this.imageAspectRatio = imageInfo.size.width / imageInfo.size.height;
         }
+        // Written before the decode is attempted: a page that fails to load is
+        // exactly when the format and dimensions matter.
+        AppLog.detail('reader',
+          `page ${this.page.pageNumber} "${this.page.path}" ${buffer.byteLength} bytes ` +
+          `format=${describeImageFormat(buffer)} ${imageInfo.size.width}x${imageInfo.size.height}`);
         const decodeSize: image.Size | undefined = readerDecodeSize(imageInfo);
         let decoded: image.PixelMap | undefined = undefined;
         if (decodeSize === undefined) {
@@ -383,14 +597,51 @@ struct ReaderImageView {
           return;
         }
         this.pixelMap = decoded;
+        this.reportLoadState(ReaderPageLoadState.Loaded);
       } finally {
         await source.release();
       }
     } catch (error) {
       this.errorMessage = this.describeError(error);
+      AppLog.error('reader',
+        `page ${this.page.pageNumber} "${this.page.path}" failed: ` +
+        `${AppLog.describe(error)}`);
+      this.reportLoadState(ReaderPageLoadState.Failed);
     } finally {
       this.isLoading = false;
     }
+  }
+
+  /**
+   * Forwards load state for the pages the reader is showing or is about to show.
+   * A waterfall list keeps far-away children alive and silent.
+   */
+  private reportLoadState(state: ReaderPageLoadState): void {
+    if (this.destroyed || !this.isReportedPage()) {
+      return;
+    }
+    this.onLoadStateChanged(this.page.pageNumber, state);
+  }
+
+  private isReportedPage(): boolean {
+    return this.page.pageNumber >= this.reportWindowStart &&
+      this.page.pageNumber <= this.reportWindowEnd;
+  }
+
+  /**
+   * Re-reports a page whose decode finished before it was in the window.
+   *
+   * The initial report happens once, when the decode completes; a page that was
+   * preloaded off-window at that moment never reported at all, so the reader
+   * counted it as missing even though it was ready. Waiting for the window to
+   * arrive is what fixes the count, and it also covers a retry that succeeded
+   * while the page was not being looked at.
+   */
+  private onReportWindowChanged(): void {
+    if (this.destroyed || this.pixelMap === undefined) {
+      return;
+    }
+    this.reportLoadState(ReaderPageLoadState.Loaded);
   }
 
   private describeError(error: Object): string {
@@ -418,6 +669,12 @@ export struct ArchiveReaderPage {
   @State private doublePageOffset: number = 0;
   @State private preloadPageCount: number = 3;
   @State private interpolationIndex: number = 3;
+  // How many of the pages after the current one are ready to display.
+  @State private preloadedAheadCount: number = 0;
+  @State private preloadedAheadTotal: number = 0;
+  // Loading state per page number; only pages near the current one are tracked.
+  private pageLoadStates: Map<number, ReaderPageLoadState> =
+    new Map<number, ReaderPageLoadState>();
   @State private offlineProgress: number = 0;
   @State private readerViewportWidth: number = 1;
   @State private readerViewportHeight: number = 1;
@@ -444,10 +701,27 @@ export struct ArchiveReaderPage {
 
   aboutToBeDeleted(): void {
     this.restoreReaderWindow();
-    // The decoded page cache is deliberately kept. It lives in cacheDir, which
-    // the system reclaims under storage pressure, and clearing it here forced a
-    // full re-download of the document the next time it was opened. Settings
-    // still offers an explicit "clear reading cache" action.
+    // The reader cache exists so a page is not downloaded twice while reading
+    // one document, so it is dropped as soon as that document is closed. It is
+    // not dropped from `aboutToDisappear`: pushing archive information on top of
+    // the reader also triggers that, and the reader is still on the stack.
+    // Explicit downloads are unaffected; they live in OfflineArchiveCache. The
+    // cover cache is not touched either.
+    this.clearReaderPageCache();
+  }
+
+  private clearReaderPageCache(): void {
+    if (this.params.archive.id.length === 0) {
+      return;
+    }
+    try {
+      const context: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const cache: ImageDiskCache = new ImageDiskCache(context, this.serverUrl);
+      cache.clearArchivePagesAsync(this.params.archive.id).catch(() => {});
+    } catch (error) {
+      // A document that cannot be cleaned up just frees its space later.
+    }
   }
 
   build() {
@@ -494,7 +768,13 @@ export struct ArchiveReaderPage {
                       apiKey: this.apiKey,
                       continuous: true,
                       contentWidthPercent: this.waterfallScale * 100,
-                      interpolationIndex: this.interpolationIndex
+                      interpolationIndex: this.interpolationIndex,
+                      reportWindowStart: this.pageNumberAt(this.currentPageIndex),
+                      reportWindowEnd: this.preloadWindowEndPageNumber(),
+                      pageIsCurrent: page.pageNumber === this.pageNumberAt(this.currentPageIndex),
+                      onLoadStateChanged: (pageNumber: number, state: ReaderPageLoadState): void => {
+                        this.handlePageLoadState(pageNumber, state);
+                      }
                     })
                   }
                   .width('100%')
@@ -579,7 +859,7 @@ export struct ArchiveReaderPage {
               }
             })
             .onClick((event: ClickEvent) => {
-              this.handleHorizontalTap(event.x);
+              this.handleHorizontalTap(event.x, event.y);
             })
           } else {
             Swiper(this.swiperController) {
@@ -591,8 +871,14 @@ export struct ArchiveReaderPage {
                   apiKey: this.apiKey,
                   continuous: false,
                   interpolationIndex: this.interpolationIndex,
+                  reportWindowStart: this.pageNumberAt(this.currentPageIndex),
+                  reportWindowEnd: this.preloadWindowEndPageNumber(),
+                  pageIsCurrent: page.pageNumber === this.pageNumberAt(this.currentPageIndex),
                   onZoomChanged: (scale: number): void => {
                     this.pageZoomScale = scale;
+                  },
+                  onLoadStateChanged: (pageNumber: number, state: ReaderPageLoadState): void => {
+                    this.handlePageLoadState(pageNumber, state);
                   }
                 })
               }, (page: ReaderPage) => `horizontal-${page.pageNumber}`)
@@ -638,7 +924,7 @@ export struct ArchiveReaderPage {
               }
             })
             .onClick((event: ClickEvent) => {
-              this.handleHorizontalTap(event.x);
+              this.handleHorizontalTap(event.x, event.y);
             })
           }
         }
@@ -724,35 +1010,40 @@ export struct ArchiveReaderPage {
           .position({ x: 0, y: 10 })
 
           Stack({ alignContent: Alignment.Bottom }) {
-            Row({ space: 12 }) {
-              Text(this.readerProgressLabel())
-                .copyOption(CopyOptions.LocalDevice)
-                .fontSize(14)
-                .fontWeight(FontWeight.Medium)
-                .fontColor(Color.White)
-                .width(62)
-                .textAlign(TextAlign.Center)
+            Column({ space: 10 }) {
+              this.preloadedAheadRow()
 
-              Slider({
-                value: this.currentPageIndex + 1,
-                min: 1,
-                max: Math.max(this.pages.length, 1),
-                step: 1,
-                style: SliderStyle.OutSet
-              })
-                .selectedColor('#FF3F7CFF')
-                .trackColor('#66FFFFFF')
-                .blockColor(Color.White)
-                .layoutWeight(1)
-                .onChange((value: number, mode: SliderChangeMode) => {
-                  const targetIndex: number =
-                    Math.min(Math.max(Math.round(value) - 1, 0), this.pages.length - 1);
-                  this.currentPageIndex = targetIndex;
-                  this.moveReaderToIndex(targetIndex);
-                  if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-                    this.syncProgress(this.pages[targetIndex]);
-                  }
+              Row({ space: 12 }) {
+                Text(this.readerProgressLabel())
+                  .copyOption(CopyOptions.LocalDevice)
+                  .fontSize(14)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(Color.White)
+                  .width(62)
+                  .textAlign(TextAlign.Center)
+
+                Slider({
+                  value: this.currentPageIndex + 1,
+                  min: 1,
+                  max: Math.max(this.pages.length, 1),
+                  step: 1,
+                  style: SliderStyle.OutSet
                 })
+                  .selectedColor('#FF3F7CFF')
+                  .trackColor('#66FFFFFF')
+                  .blockColor(Color.White)
+                  .layoutWeight(1)
+                  .onChange((value: number, mode: SliderChangeMode) => {
+                    const targetIndex: number =
+                      Math.min(Math.max(Math.round(value) - 1, 0), this.pages.length - 1);
+                    this.currentPageIndex = targetIndex;
+                    this.moveReaderToIndex(targetIndex);
+                    if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                      this.syncProgress(this.pages[targetIndex]);
+                    }
+                  })
+              }
+              .width('100%')
             }
             .width('100%')
             .padding({ left: 14, right: 18, top: 12, bottom: 18 })
@@ -910,8 +1201,14 @@ export struct ArchiveReaderPage {
           doublePage: true,
           imageAlignment: alignment,
           interpolationIndex: this.interpolationIndex,
+          reportWindowStart: this.pageNumberAt(this.currentPageIndex),
+          reportWindowEnd: this.preloadWindowEndPageNumber(),
+          pageIsCurrent: page.pageNumber === this.pageNumberAt(this.currentPageIndex),
           onZoomChanged: (scale: number): void => {
             this.pageZoomScale = scale;
+          },
+          onLoadStateChanged: (pageNumber: number, state: ReaderPageLoadState): void => {
+            this.handlePageLoadState(pageNumber, state);
           }
         })
       }
@@ -919,6 +1216,75 @@ export struct ArchiveReaderPage {
     .layoutWeight(1)
     .height('100%')
     .backgroundColor(Color.Black)
+  }
+
+  /**
+   * How many pages after the current one are ready.
+   *
+   * A ratio rather than one mark per page: pages finish out of order, so a row
+   * of dots would suggest an order that does not exist. The download itself is
+   * reported on the page in the middle, not here.
+   */
+  @Builder
+  private preloadedAheadRow() {
+    Row({ space: 10 }) {
+      Text(this.preloadedAheadLabel())
+        .copyOption(CopyOptions.LocalDevice)
+        .fontSize(12)
+        .fontColor('#CCFFFFFF')
+        .hitTestBehavior(HitTestMode.None)
+
+      Progress({
+        value: this.preloadedAheadCount,
+        total: Math.max(this.preloadedAheadTotal, 1),
+        type: ProgressType.Linear
+      })
+        .width(84)
+        .height(4)
+        .color('#FF3F7CFF')
+        .backgroundColor('#40FFFFFF')
+    }
+    .width('100%')
+  }
+
+  private preloadedAheadLabel(): string {
+    if (this.preloadedAheadTotal === 0) {
+      return localized('未预载后续页');
+    }
+    return `${localized('已预载')} ${this.preloadedAheadCount}/${this.preloadedAheadTotal} ${localized('页', 'pages')}`;
+  }
+
+  /**
+   * Fetches the page list, waiting out an on-demand extraction.
+   *
+   * LANraragi extracts an archive the first time it is read: that request comes
+   * back empty with a Minion job, and the pages only appear once the job has
+   * run. Treating the empty answer as a failure sent the reader to an error page
+   * for an archive that was merely being prepared.
+   */
+  private async loadPagesFromServer(client: LanraragiApiClient): Promise<Array<ReaderPage>> {
+    let attempts: number = 0;
+    while (true) {
+      const result: ArchivePagesResult =
+        await client.fetchArchivePagesResult(this.params.archive.id);
+      if (result.pages.length > 0 || !result.isPreparing) {
+        return result.pages;
+      }
+      attempts += 1;
+      if (attempts > READER_EXTRACT_RETRY_LIMIT) {
+        throw new Error(localized('服务器仍在解压该档案，请稍后重试'));
+      }
+      // The job is already running on the server; this is only the wait for it.
+      await this.waitForExtraction();
+    }
+  }
+
+  private waitForExtraction(): Promise<void> {
+    return new Promise<void>((resolve: () => void) => {
+      setTimeout(() => {
+        resolve();
+      }, READER_EXTRACT_RETRY_DELAY_MS);
+    });
   }
 
   private async loadPages(): Promise<void> {
@@ -965,7 +1331,7 @@ export struct ArchiveReaderPage {
         }
         const client: LanraragiApiClient =
           new LanraragiApiClient(config.serverUrl, config.apiKey);
-        loadedPages = await client.fetchArchivePages(this.params.archive.id);
+        loadedPages = await this.loadPagesFromServer(client);
       }
       if (loadedPages.length === 0) {
          throw new Error(localized('服务器返回的页面列表为空'));
@@ -980,6 +1346,12 @@ export struct ArchiveReaderPage {
       const initialIndex: number = this.initialPageIndex(loadedPages.length);
       this.currentPageIndex = this.readerModeIndex === 1 ?
         this.spreadEndIndexForPage(initialIndex) : initialIndex;
+      this.pageLoadStates.clear();
+      this.refreshPreloadedAheadCount();
+      AppLog.info('reader',
+        `opened ${this.params.archive.id} mode=${this.readerModeIndex} ` +
+        `pages=${loadedPages.length} start=${this.currentPageIndex + 1} ` +
+        `preload=${this.preloadPageCount} offline=${this.params.offline}`);
     } catch (error) {
       this.errorMessage = this.describeError(error);
       this.pages = [];
@@ -1012,6 +1384,7 @@ export struct ArchiveReaderPage {
       return;
     }
     this.currentPageIndex = index;
+    this.refreshPreloadedAheadCount();
     this.syncProgress(this.pages[index]);
   }
 
@@ -1024,7 +1397,65 @@ export struct ArchiveReaderPage {
       return;
     }
     this.currentPageIndex = spread.endIndex;
+    this.refreshPreloadedAheadCount();
     this.syncProgress(this.pages[spread.endIndex]);
+  }
+
+  /** The one-based page number of a zero-based registry index, or 0 if invalid. */
+  private pageNumberAt(index: number): number {
+    if (index < 0 || index >= this.pages.length) {
+      return 0;
+    }
+    return this.pages[index].pageNumber;
+  }
+
+  /**
+   * Last page the reader preloads past the current one.
+   *
+   * `Swiper.cachedCount(n)` keeps `n` pages alive beyond the current one in
+   * single-page mode, and `n` spreads — two pages each — in two-page mode, so
+   * that is exactly how many can ever be reported ready: the window has to match
+   * it or the count can never fill up. With preloading off the window is empty,
+   * which is also all the cache holds.
+   */
+  private preloadWindowEndPageNumber(): number {
+    const start: number = this.pageNumberAt(this.currentPageIndex);
+    if (start === 0) {
+      return 0;
+    }
+    const pagesPerTurn: number = this.readerModeIndex === 1 ? 2 : 1;
+    return start + Math.max(this.preloadPageCount, 0) * pagesPerTurn;
+  }
+
+  private handlePageLoadState(pageNumber: number, state: ReaderPageLoadState): void {
+    this.pageLoadStates.set(pageNumber, state);
+    this.refreshPreloadedAheadCount();
+  }
+
+  /**
+   * Counts how many of the next pages are ready to display.
+   *
+   * Only the pages preloading is configured to fetch are counted, from the one
+   * right after the current page up to that window, so the number answers
+   * "how many pages can I turn to without waiting".
+   */
+  private refreshPreloadedAheadCount(): void {
+    let total: number = 0;
+    let loaded: number = 0;
+    const startIndex: number = this.currentPageIndex + 1;
+    const endPageNumber: number = this.preloadWindowEndPageNumber();
+    for (let index: number = startIndex; index < this.pages.length; index += 1) {
+      const pageNumber: number = this.pages[index].pageNumber;
+      if (pageNumber > endPageNumber) {
+        break;
+      }
+      total += 1;
+      if (this.pageLoadStates.get(pageNumber) === ReaderPageLoadState.Loaded) {
+        loaded += 1;
+      }
+    }
+    this.preloadedAheadTotal = total;
+    this.preloadedAheadCount = loaded;
   }
 
   private goToPage(targetIndex: number, animated: boolean = false): void {
@@ -1039,11 +1470,16 @@ export struct ArchiveReaderPage {
       return;
     }
     this.currentPageIndex = targetIndex;
+    this.refreshPreloadedAheadCount();
     this.moveReaderToIndex(targetIndex, false);
     this.syncProgress(this.pages[targetIndex]);
   }
 
-  private handleHorizontalTap(localX: number): void {
+  private handleHorizontalTap(localX: number, localY: number): void {
+    if (this.isInsideControlsBar(localY)) {
+      // The controls own this band; turning a page here would fight the slider.
+      return;
+    }
     const leftBoundary: number = this.readerViewportWidth * 0.3;
     const rightBoundary: number = this.readerViewportWidth * 0.7;
     if (localX < leftBoundary) {
@@ -1095,9 +1531,22 @@ export struct ArchiveReaderPage {
     if (event.fingerList.length === 0) {
       return false;
     }
-    const touchY: number = event.fingerList[0].localY;
-    return this.controlsVisible &&
-      touchY >= this.readerViewportHeight - READER_CONTROLS_BAR_HEIGHT;
+    return this.isInsideControlsBar(event.fingerList[0].localY);
+  }
+
+  /**
+   * True when a touch is on the controls bar rather than on the page.
+   *
+   * The overlay lets touches through to the page below it (`HitTestMode.
+   * Transparent`), so the page-turn gesture has to exclude this band itself:
+   * otherwise a tap on the page number or the left end of the slider also turns
+   * a page. The swipe path has always done this; the tap path did not.
+   */
+  private isInsideControlsBar(localY: number): boolean {
+    if (!this.controlsVisible || this.readerViewportHeight <= 0) {
+      return false;
+    }
+    return localY >= this.readerViewportHeight - READER_CONTROLS_BAR_HEIGHT;
   }
 
   private turnPageBySwipe(offsetX: number): void {
@@ -1225,6 +1674,7 @@ export struct ArchiveReaderPage {
         Math.max(this.pages.length - 1, 0)
       );
     }
+    this.refreshPreloadedAheadCount();
   }
 
   private applyCurrentReaderDirection(directionIndex: number): void {
@@ -1240,6 +1690,7 @@ export struct ArchiveReaderPage {
     this.rebuildSpreads();
     this.currentPageIndex = this.spreadEndIndexForPage(anchorPageIndex);
     this.pageZoomScale = 1;
+    this.refreshPreloadedAheadCount();
     this.swiperController.changeIndex(this.currentSpreadIndex(), false);
     this.saveCurrentReaderSettings();
   }

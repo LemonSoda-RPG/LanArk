@@ -4,6 +4,10 @@ import { ImageDiskCache } from '../../data/cache/ImageDiskCache';
 import { OfflineArchiveCache, OfflineArchiveRecord } from '../../data/cache/OfflineArchiveCache';
 import { LanraragiApiClient } from '../../data/network/LanraragiApiClient';
 import { ServerConfigRepository } from '../../data/config/ServerConfigRepository';
+import {
+  LibrarySettings,
+  LibrarySettingsRepository
+} from '../../data/config/LibrarySettingsRepository';
 import { DownloadManager } from '../../data/download/DownloadManager';
 import { OfflineProgressRepository } from '../../data/download/OfflineProgressRepository';
 import { ArchiveItem, ReaderRouteParams, ServerConfig } from '../../domain/model/LanraragiModels';
@@ -19,6 +23,8 @@ struct DownloadedCoverView {
   fileExtension: string = '';
   serverUrl: string = '';
   apiKey: string = '';
+  // Same cover treatment as the library grid (library setting).
+  cropCover: boolean = true;
   @State private cover: image.PixelMap | undefined = undefined;
   @State private isLoading: boolean = false;
   // Set when the component is destroyed; a decode still awaiting at that point
@@ -47,7 +53,7 @@ struct DownloadedCoverView {
         Image(this.cover as image.PixelMap)
           .width('100%')
           .height('100%')
-          .objectFit(ImageFit.Cover)
+          .objectFit(this.cropCover ? ImageFit.Cover : ImageFit.Contain)
       } else {
         Text(this.fileExtension.toUpperCase())
           .copyOption(CopyOptions.LocalDevice)
@@ -108,10 +114,19 @@ struct DownloadedCoverView {
           decoded.release().catch(() => {});
           return;
         }
-        this.cover = decoded;
+        // Written before the state takes ownership: publishing the PixelMap
+        // first would let aboutToBeDeleted release it while the encoder is still
+        // reading it, and writeFileIfMissing keeps whatever bytes that produced.
         if (shouldCache) {
           await cache.writeCover(this.archiveId, decoded);
         }
+        if (this.destroyed) {
+          // Destroyed during the encode; the cache is already written, so the
+          // decode result is the only thing to drop.
+          decoded.release().catch(() => {});
+          return;
+        }
+        this.cover = decoded;
       } finally {
         await source.release();
       }
@@ -164,9 +179,24 @@ export struct DownloadedArchivesPage {
   @State private serverUrl: string = '';
   @State private apiKey: string = '';
   @State private deletingArchiveId: string = '';
+  // Mirrors the library's cover setting so both screens look the same.
+  @State private coverCrop: boolean = true;
 
   aboutToAppear(): void {
     this.refresh();
+    this.loadCoverSetting();
+  }
+
+  private async loadCoverSetting(): Promise<void> {
+    try {
+      const context: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const settings: LibrarySettings =
+        await new LibrarySettingsRepository(context).load();
+      this.coverCrop = settings.coverCrop;
+    } catch (error) {
+      // The default (crop) matches what the library showed before this setting.
+    }
   }
 
   build() {
@@ -269,7 +299,8 @@ export struct DownloadedArchivesPage {
         archiveId: record.archive.id,
         fileExtension: record.archive.fileExtension,
         serverUrl: this.serverUrl,
-        apiKey: this.apiKey
+        apiKey: this.apiKey,
+        cropCover: this.coverCrop
       })
 
       Column({ space: 6 }) {
@@ -335,8 +366,11 @@ export struct DownloadedArchivesPage {
       const context: common.UIAbilityContext =
         this.getUIContext().getHostContext() as common.UIAbilityContext;
       // This path is deliberately local-only: no API client and no server call.
+      // The worker has to be stopped before its files go away: a download that
+      // is still fetching a page would otherwise resume afterwards and write
+      // into the directory just removed.
+      await DownloadManager.cancelAndWait(record.archive.id);
       new OfflineArchiveCache(context, this.serverUrl).clearArchive(record.archive.id);
-      await DownloadManager.forget(record.archive.id);
       await new OfflineProgressRepository(context).clear(record.archive.id);
       this.records = this.records.filter((item: OfflineArchiveRecord) => {
         return item.archive.id !== record.archive.id;

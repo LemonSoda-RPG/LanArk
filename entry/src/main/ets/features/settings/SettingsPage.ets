@@ -4,6 +4,8 @@ import {
   ImageCacheStats,
   ImageDiskCache
 } from '../../data/cache/ImageDiskCache';
+import { LibraryIndexCacheRepository } from '../../data/cache/LibraryIndexCacheRepository';
+import { OfflineArchiveCache } from '../../data/cache/OfflineArchiveCache';
 import {
   LibrarySettings,
   LibrarySettingsRepository
@@ -21,18 +23,11 @@ import {
   ReleaseInfo
 } from '../../data/update/UpdateChecker';
 import { ServerConfig, ServerProfile } from '../../domain/model/LanraragiModels';
+import { AppLog } from '../../data/log/AppLog';
 import { describeUserFacingError, localized } from '../../common/Localization';
 
 interface CacheDialogResult {
   index: number;
-}
-
-class ServerProfileSelectOption {
-  readonly value: string;
-
-  constructor(value: string) {
-    this.value = value;
-  }
 }
 
 @Component
@@ -44,6 +39,7 @@ export struct SettingsPage {
     (settings: LibrarySettings): void => {};
   @State private serverUrl: string = '';
   @State private apiKey: string = '';
+  @State private isApiKeyVisible: boolean = false;
   @State private serverProfiles: Array<ServerProfile> = [];
   @State private selectedServerProfileIndex: number = -1;
   @State private directionIndex: number = 0;
@@ -54,6 +50,10 @@ export struct SettingsPage {
   @State private hideCompleted: boolean = false;
   @State private gridLayout: boolean = true;
   @State private gridColumns: number = 0;
+  @State private coverCrop: boolean = true;
+  // Diagnostic log switches; off until the user asks for them.
+  @State private logEnabled: boolean = false;
+  @State private logVerbose: boolean = true;
   @State private isServerBusy: boolean = false;
   @State private serverMessage: string = '';
   @State private serverMessageIsError: boolean = false;
@@ -75,6 +75,7 @@ export struct SettingsPage {
 
   aboutToAppear(): void {
     this.currentVersion = installedVersion();
+    this.loadLogSettings();
     this.loadSettings();
     this.refreshCacheStats().catch(() => {});
   }
@@ -89,6 +90,7 @@ export struct SettingsPage {
           this.cacheSection()
           this.readerSection()
           this.updateSection()
+          this.diagnosticsSection()
           Text(localized('服务器配置仅保存在本机；阅读时只同步进度，不会删除服务器中的任何档案。'))
             .copyOption(CopyOptions.LocalDevice)
             .fontSize(12)
@@ -107,6 +109,154 @@ export struct SettingsPage {
     }
     .title(localized('设置'))
     .backgroundColor($r('app.color.page_background'))
+  }
+
+  /**
+   * Entry point to the collected log.
+   *
+   * Placed in Settings rather than behind a hidden gesture: reporting a problem
+   * should not need instructions.
+   */
+  @Builder
+  private diagnosticsSection() {
+    Column({ space: 10 }) {
+      this.sectionTitle(localized('诊断'),
+        localized('默认关闭；开启后可用于定位问题'))
+
+      Row({ space: 12 }) {
+        Column({ space: 3 }) {
+          Text(localized('记录诊断日志'))
+            .copyOption(CopyOptions.LocalDevice)
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_primary'))
+            .width('100%')
+          Text(localized('记录请求、解码、缓存与删除等操作，便于定位问题。不记录服务器地址和 API Key。',
+            'Records requests, decoding, cache and delete operations. The server address and API key are never recorded.'))
+            .copyOption(CopyOptions.LocalDevice)
+            .fontSize(12)
+            .lineHeight(17)
+            .fontColor($r('app.color.text_tertiary'))
+            .width('100%')
+        }
+        .layoutWeight(1)
+
+        Toggle({ type: ToggleType.Switch, isOn: this.logEnabled })
+          .selectedColor($r('app.color.accent'))
+          .onChange((value: boolean) => {
+            this.applyLogSettings(value, this.logVerbose);
+          })
+      }
+      .width('100%')
+      .padding({ top: 6, bottom: 6 })
+
+      if (this.logEnabled) {
+        Row({ space: 12 }) {
+          Column({ space: 3 }) {
+            Text(localized('详细记录'))
+              .copyOption(CopyOptions.LocalDevice)
+              .fontSize(15)
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.text_primary'))
+              .width('100%')
+            Text(localized('额外记录每一次请求与每一页的解码细节；关闭后只保留关键步骤和错误。',
+              'Also records every request and page decode. Off keeps only milestones and errors.'))
+              .copyOption(CopyOptions.LocalDevice)
+              .fontSize(12)
+              .lineHeight(17)
+              .fontColor($r('app.color.text_tertiary'))
+              .width('100%')
+          }
+          .layoutWeight(1)
+
+          Toggle({ type: ToggleType.Switch, isOn: this.logVerbose })
+            .selectedColor($r('app.color.accent'))
+            .onChange((value: boolean) => {
+              this.applyLogSettings(this.logEnabled, value);
+            })
+        }
+        .width('100%')
+        .padding({ top: 6, bottom: 6 })
+      }
+
+      Row({ space: 12 }) {
+        Stack({ alignContent: Alignment.Center }) {
+          Image($r('app.media.icon_info'))
+            .width(20)
+            .height(20)
+            .renderMode(ImageRenderMode.Template)
+            .fillColor($r('app.color.accent_text'))
+        }
+        .width(38)
+        .height(38)
+        .backgroundColor($r('app.color.accent_soft'))
+        .borderRadius(12)
+
+        Column({ space: 3 }) {
+          Text(localized('查看与复制'))
+            .copyOption(CopyOptions.LocalDevice)
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_primary'))
+            .width('100%')
+          Text(`${AppLog.entryCount()} ${localized('条记录，可复制或清空', 'entries — copy or clear them')}`)
+            .copyOption(CopyOptions.LocalDevice)
+            .fontSize(12)
+            .fontColor($r('app.color.text_tertiary'))
+            .width('100%')
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+
+        Image($r('app.media.icon_chevron_right'))
+          .width(18)
+          .height(18)
+          .renderMode(ImageRenderMode.Template)
+          .fillColor($r('app.color.text_tertiary'))
+      }
+      .width('100%')
+      .padding(12)
+      .backgroundColor($r('app.color.surface_muted'))
+      .borderRadius(14)
+      .accessibilityText(localized('诊断日志'))
+      .onClick(() => {
+        this.pathStack.pushPath({
+          name: 'DiagnosticLog',
+          param: new Object()
+        });
+      })
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor($r('app.color.surface'))
+    .border({ width: 1, color: $r('app.color.divider') })
+    .borderRadius(18)
+  }
+
+  /** Reads the stored switches into the page state. */
+  private loadLogSettings(): void {
+    try {
+      const context: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const stored: Array<boolean> = AppLog.loadSettings(context);
+      this.logEnabled = stored[0];
+      this.logVerbose = stored[1];
+    } catch (error) {
+      // The defaults (off) stay in place.
+    }
+  }
+
+  /** Persists a switch and applies it to the running session at once. */
+  private applyLogSettings(enabled: boolean, verbose: boolean): void {
+    this.logEnabled = enabled;
+    this.logVerbose = verbose;
+    try {
+      const context: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext;
+      AppLog.saveSettings(context, enabled, verbose);
+    } catch (error) {
+      // The switch still applies to this session.
+    }
   }
 
   @Builder
@@ -149,113 +299,133 @@ export struct SettingsPage {
   @Builder
   private serverSection() {
     Column({ space: 14 }) {
-      this.sectionTitle(localized('服务器连接'), localized('修改后需要验证才能保存'))
+      Row({ space: 12 }) {
+        Stack({ alignContent: Alignment.Center }) {
+          Image($r('app.media.icon_server'))
+            .width(21)
+            .height(21)
+            .renderMode(ImageRenderMode.Template)
+            .fillColor($r('app.color.accent_text'))
+        }
+        .width(40)
+        .height(40)
+        .backgroundColor($r('app.color.accent_soft'))
+        .borderRadius(13)
 
-      Column({ space: 8 }) {
-        Text(localized('保存的服务器'))
-          .copyOption(CopyOptions.LocalDevice)
-          .fontSize(13)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_secondary'))
-          .width('100%')
-        if (this.serverProfiles.length > 0) {
-          Select(this.serverProfiles.map((profile: ServerProfile) => {
-            return new ServerProfileSelectOption(profile.name);
-          }))
-            .selected(Math.max(this.selectedServerProfileIndex, 0))
-            .value(this.selectedServerProfileLabel())
-            .height(46)
+        Column({ space: 3 }) {
+          Text(localized('服务器连接'))
+            .copyOption(CopyOptions.LocalDevice)
+            .fontSize(18)
+            .fontWeight(FontWeight.Bold)
             .fontColor($r('app.color.text_primary'))
-            .selectedOptionFontColor(Color.White)
-            .selectedOptionBgColor($r('app.color.accent'))
-            .optionFontColor($r('app.color.text_primary'))
-            .optionBgColor($r('app.color.surface'))
-            .backgroundColor($r('app.color.surface_muted'))
             .width('100%')
-            .onSelect((index: number, value: string) => {
-              this.selectServerProfile(index);
-            })
-        } else {
-          Text(localized('没有保存的服务器'))
+          Text(localized('修改后需要验证才能保存'))
             .copyOption(CopyOptions.LocalDevice)
             .fontSize(12)
             .fontColor($r('app.color.text_tertiary'))
             .width('100%')
         }
-        Button(localized('新增服务器'))
-          .height(40)
-          .fontSize(13)
-          .fontColor($r('app.color.accent'))
-          .backgroundColor($r('app.color.accent_soft'))
-          .width('100%')
-          .onClick(() => {
-            this.startNewServer();
-          })
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
       }
       .width('100%')
 
-      Column({ space: 7 }) {
-        Text(localized('服务器地址'))
+      Divider()
+        .color($r('app.color.divider'))
+
+      this.savedServersBlock()
+
+      Column({ space: 10 }) {
+        Text(this.selectedServerProfileIndex >= 0 ?
+          localized('编辑当前服务器') : localized('新增服务器'))
           .copyOption(CopyOptions.LocalDevice)
-          .fontSize(13)
+          .fontSize(14)
           .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_secondary'))
-          .width('100%')
-        TextInput({
-          placeholder: localized('例如：http://192.168.1.10:3000'),
-          text: this.serverUrl
-        })
-          .type(InputType.Normal)
-          .height(50)
           .fontColor($r('app.color.text_primary'))
-          .placeholderColor($r('app.color.text_tertiary'))
-          .backgroundColor($r('app.color.surface_muted'))
-          .borderRadius(12)
-          .onChange((value: string) => {
-            this.serverUrl = value;
-            this.serverMessage = '';
+          .width('100%')
+
+        Row({ space: 8 }) {
+          Image($r('app.media.icon_globe'))
+            .width(19)
+            .height(19)
+            .renderMode(ImageRenderMode.Template)
+            .fillColor($r('app.color.text_tertiary'))
+
+          TextInput({
+            placeholder: localized('http://192.168.1.10:3000'),
+            text: this.serverUrl
           })
+            .type(InputType.Normal)
+            .enterKeyType(EnterKeyType.Next)
+            .height(46)
+            .padding(0)
+            .layoutWeight(1)
+            .fontSize(15)
+            .fontColor($r('app.color.text_primary'))
+            .placeholderColor($r('app.color.text_tertiary'))
+            .backgroundColor(Color.Transparent)
+            .onChange((value: string) => {
+              this.serverUrl = value;
+              this.serverMessage = '';
+            })
+        }
+        .width('100%')
+        .padding({ left: 13, right: 13 })
+        .backgroundColor($r('app.color.surface_muted'))
+        .borderRadius(13)
+
+        Row({ space: 8 }) {
+          Image($r('app.media.icon_key'))
+            .width(19)
+            .height(19)
+            .renderMode(ImageRenderMode.Template)
+            .fillColor($r('app.color.text_tertiary'))
+
+          TextInput({
+            placeholder: localized('输入 LANraragi API Key'),
+            text: this.apiKeyDisplayText()
+          })
+            .type(InputType.Normal)
+            .height(46)
+            .padding(0)
+            .layoutWeight(1)
+            .fontSize(15)
+            .fontColor($r('app.color.text_primary'))
+            .placeholderColor($r('app.color.text_tertiary'))
+            .backgroundColor(Color.Transparent)
+            .onChange((value: string) => {
+              // A masked field only ever echoes the mask, so its value is
+              // ignored: the real key is typed in or pasted in the clear.
+              if (this.isApiKeyVisible) {
+                this.apiKey = value;
+              }
+              this.serverMessage = '';
+            })
+
+          Button() {
+            Image(this.isApiKeyVisible ?
+              $r('app.media.icon_eye_off') : $r('app.media.icon_eye'))
+              .width(19)
+              .height(19)
+              .renderMode(ImageRenderMode.Template)
+              .fillColor($r('app.color.text_tertiary'))
+          }
+            .width(36)
+            .height(36)
+            .backgroundColor(Color.Transparent)
+            .accessibilityText(this.isApiKeyVisible ?
+              localized('隐藏 API Key', 'Hide API key') :
+              localized('显示 API Key', 'Show API key'))
+            .onClick(() => {
+              this.isApiKeyVisible = !this.isApiKeyVisible;
+            })
+        }
+        .width('100%')
+        .padding({ left: 13, right: 5 })
+        .backgroundColor($r('app.color.surface_muted'))
+        .borderRadius(13)
       }
       .width('100%')
-
-      Column({ space: 7 }) {
-        Text('API Key')
-          .copyOption(CopyOptions.LocalDevice)
-          .fontSize(13)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_secondary'))
-          .width('100%')
-        TextInput({
-          placeholder: localized('输入 LANraragi API Key'),
-          text: this.apiKey
-        })
-          .type(InputType.Password)
-          .showPasswordIcon(true)
-          .height(50)
-          .fontColor($r('app.color.text_primary'))
-          .placeholderColor($r('app.color.text_tertiary'))
-          .backgroundColor($r('app.color.surface_muted'))
-          .borderRadius(12)
-          .onChange((value: string) => {
-            this.apiKey = value;
-            this.serverMessage = '';
-          })
-      }
-      .width('100%')
-
-      if (this.serverMessage.length > 0) {
-        Text(this.serverMessage)
-          .copyOption(CopyOptions.LocalDevice)
-          .fontSize(13)
-          .lineHeight(19)
-          .fontColor(this.serverMessageIsError ?
-            $r('app.color.error') : $r('app.color.success'))
-          .width('100%')
-          .padding(11)
-          .backgroundColor(this.serverMessageIsError ?
-            $r('app.color.error_soft') : $r('app.color.success_soft'))
-          .borderRadius(10)
-      }
 
       Row({ space: 10 }) {
         Button(this.isServerBusy ? localized('正在验证…') : localized('验证并保存'))
@@ -265,6 +435,7 @@ export struct SettingsPage {
           .fontWeight(FontWeight.Medium)
           .backgroundColor($r('app.color.accent'))
           .enabled(!this.isServerBusy)
+          .accessibilityText(localized('验证并保存服务器连接'))
           .onClick(() => {
             this.verifyAndSaveServer();
           })
@@ -281,24 +452,213 @@ export struct SettingsPage {
       }
       .width('100%')
 
-      if (this.selectedServerProfileIndex >= 0 && this.serverProfiles.length > 0) {
-        Button(localized('删除当前服务器'))
-          .height(42)
-          .fontSize(14)
-          .fontColor($r('app.color.error'))
-          .backgroundColor($r('app.color.error_soft'))
-          .enabled(!this.isServerBusy)
-          .width('100%')
-          .onClick(() => {
-            this.confirmDeleteServer();
-          })
+      if (this.serverMessage.length > 0) {
+        Row({ space: 8 }) {
+          Image(this.serverMessageIsError ?
+            $r('app.media.icon_info') : $r('app.media.icon_check_circle'))
+            .width(17)
+            .height(17)
+            .renderMode(ImageRenderMode.Template)
+            .fillColor(this.serverMessageIsError ?
+              $r('app.color.error') : $r('app.color.success'))
+
+          Text(this.serverMessage)
+            .copyOption(CopyOptions.LocalDevice)
+            .fontSize(13)
+            .lineHeight(19)
+            .fontColor(this.serverMessageIsError ?
+              $r('app.color.error') : $r('app.color.success'))
+            .layoutWeight(1)
+        }
+        .width('100%')
+        .padding(11)
+        .backgroundColor(this.serverMessageIsError ?
+          $r('app.color.error_soft') : $r('app.color.success_soft'))
+        .borderRadius(10)
       }
+
+      Text(localized('服务器配置仅保存在本机，API Key 存放在系统安全存储中。',
+        'Server settings stay on this device; the API key is kept in system secure storage.'))
+        .copyOption(CopyOptions.LocalDevice)
+        .fontSize(12)
+        .lineHeight(18)
+        .fontColor($r('app.color.text_tertiary'))
+        .width('100%')
+        .padding({ left: 2 })
     }
     .width('100%')
     .padding(16)
     .backgroundColor($r('app.color.surface'))
     .border({ width: 1, color: $r('app.color.divider') })
     .borderRadius(18)
+  }
+
+  /** Saved endpoints, as tappable rows instead of a dropdown. */
+  @Builder
+  private savedServersBlock() {
+    Column({ space: 10 }) {
+      Row() {
+        Text(localized('保存的服务器'))
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(14)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+          .layoutWeight(1)
+
+        if (this.serverProfiles.length > 0) {
+          Text(`${this.serverProfiles.length} ${localized('项', 'items')}`)
+            .copyOption(CopyOptions.LocalDevice)
+            .fontSize(12)
+            .fontColor($r('app.color.text_tertiary'))
+        }
+      }
+      .width('100%')
+
+      if (this.serverProfiles.length === 0) {
+        Column({ space: 6 }) {
+          Image($r('app.media.icon_server'))
+            .width(26)
+            .height(26)
+            .renderMode(ImageRenderMode.Template)
+            .fillColor($r('app.color.text_tertiary'))
+          Text(localized('没有保存的服务器'))
+            .copyOption(CopyOptions.LocalDevice)
+            .fontSize(13)
+            .fontColor($r('app.color.text_tertiary'))
+            .textAlign(TextAlign.Center)
+          Text(localized('在下方填写地址和 API Key 后点击“验证并保存”。',
+            'Fill in the address and API key below, then tap Verify and save.'))
+            .copyOption(CopyOptions.LocalDevice)
+            .fontSize(12)
+            .lineHeight(18)
+            .fontColor($r('app.color.text_tertiary'))
+            .textAlign(TextAlign.Center)
+        }
+        .width('100%')
+        .padding({ top: 14, bottom: 16 })
+      } else {
+        ForEach(this.serverProfiles, (profile: ServerProfile, index: number) => {
+          this.serverProfileRow(profile, index)
+        }, (profile: ServerProfile) => `server-profile-${profile.id}`)
+      }
+
+      Button() {
+        Row({ space: 6 }) {
+          Image($r('app.media.icon_server'))
+            .width(17)
+            .height(17)
+            .renderMode(ImageRenderMode.Template)
+            .fillColor($r('app.color.accent_text'))
+          Text(localized('新增服务器'))
+            .copyOption(CopyOptions.LocalDevice)
+            .fontSize(14)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.accent_text'))
+            .hitTestBehavior(HitTestMode.None)
+        }
+      }
+        .height(42)
+        .width('100%')
+        .backgroundColor($r('app.color.accent_soft'))
+        .borderRadius(13)
+        .accessibilityText(localized('新增服务器'))
+        .onClick(() => {
+          this.startNewServer();
+        })
+    }
+    .width('100%')
+  }
+
+  @Builder
+  private serverProfileRow(profile: ServerProfile, index: number) {
+    Row({ space: 12 }) {
+      Stack({ alignContent: Alignment.Center }) {
+        Image(this.isSelectedServerProfile(index) ?
+          $r('app.media.icon_link') : $r('app.media.icon_server'))
+          .width(20)
+          .height(20)
+          .renderMode(ImageRenderMode.Template)
+          .fillColor(this.isSelectedServerProfile(index) ?
+            $r('app.color.accent_text') : $r('app.color.text_tertiary'))
+      }
+      .width(38)
+      .height(38)
+      .backgroundColor(this.isSelectedServerProfile(index) ?
+        $r('app.color.surface') : $r('app.color.surface_muted'))
+      .borderRadius(12)
+
+      Column({ space: 3 }) {
+        Row({ space: 6 }) {
+          Text(profile.name)
+            .copyOption(CopyOptions.LocalDevice)
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_primary'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .layoutWeight(1)
+            .hitTestBehavior(HitTestMode.None)
+
+          if (this.isSelectedServerProfile(index)) {
+            // Tapping a row only loads it into the form; the endpoint becomes
+            // active when it is verified and saved. The label says so, rather
+            // than claiming the row is already in use.
+            Text(localized('编辑中', 'Editing'))
+              .copyOption(CopyOptions.LocalDevice)
+              .fontSize(11)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Color.White)
+              .padding({ left: 7, right: 7, top: 2, bottom: 2 })
+              .backgroundColor($r('app.color.accent'))
+              .borderRadius(7)
+              .hitTestBehavior(HitTestMode.None)
+          }
+        }
+        .width('100%')
+
+        Text(this.serverProfileSubtitle(profile))
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(12)
+          .fontColor($r('app.color.text_tertiary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+          .hitTestBehavior(HitTestMode.None)
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+
+      Button() {
+        Image($r('app.media.icon_trash'))
+          .width(18)
+          .height(18)
+          .renderMode(ImageRenderMode.Template)
+          .fillColor($r('app.color.text_tertiary'))
+      }
+        .width(36)
+        .height(36)
+        .backgroundColor($r('app.color.surface_muted'))
+        .borderRadius(11)
+        .enabled(!this.isServerBusy)
+        .accessibilityText(`${localized('删除服务器')}: ${profile.name}`)
+        .onClick(() => {
+          this.confirmDeleteServer(index);
+        })
+    }
+    .width('100%')
+    .padding(12)
+    .backgroundColor(this.isSelectedServerProfile(index) ?
+      $r('app.color.accent_soft') : $r('app.color.surface_muted'))
+    .border({
+      width: this.isSelectedServerProfile(index) ? 1.5 : 0,
+      color: $r('app.color.accent')
+    })
+    .borderRadius(14)
+    .accessibilityText(profile.name)
+    .accessibilityChecked(this.isSelectedServerProfile(index))
+    .onClick(() => {
+      this.selectServerProfile(index);
+    })
   }
 
   @Builder
@@ -341,6 +701,36 @@ export struct SettingsPage {
       }
       .width('100%')
       .height(66)
+      .padding({ top: 8, bottom: 8 })
+
+      Divider().color($r('app.color.divider'))
+
+      Row({ space: 12 }) {
+        Column({ space: 3 }) {
+          Text(localized('裁剪封面'))
+            .copyOption(CopyOptions.LocalDevice)
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_primary'))
+            .width('100%')
+          Text(localized('开启时封面填满卡片并裁掉超出部分；关闭时完整显示整张封面，卡片内会留出空白'))
+            .copyOption(CopyOptions.LocalDevice)
+            .fontSize(12)
+            .lineHeight(17)
+            .fontColor($r('app.color.text_tertiary'))
+            .width('100%')
+        }
+        .layoutWeight(1)
+
+        Toggle({ type: ToggleType.Switch, isOn: this.coverCrop })
+          .selectedColor($r('app.color.accent'))
+          .onChange((value: boolean) => {
+            this.coverCrop = value;
+            this.saveLibrarySettings();
+          })
+      }
+      .width('100%')
+      .height(76)
       .padding({ top: 8, bottom: 8 })
 
       Divider().color($r('app.color.divider'))
@@ -885,17 +1275,38 @@ export struct SettingsPage {
       this.hideCompleted = settings.hideCompleted;
       this.gridLayout = settings.gridLayout;
       this.gridColumns = settings.gridColumns;
+    this.coverCrop = settings.coverCrop;
     } catch (error) {
       // Library defaults remain available when preferences cannot be read.
     }
   }
 
-  private selectedServerProfileLabel(): string {
-    if (this.selectedServerProfileIndex >= 0 &&
-      this.selectedServerProfileIndex < this.serverProfiles.length) {
-      return this.serverProfiles[this.selectedServerProfileIndex].name;
+  /** True when the row at `index` is the endpoint currently being edited. */
+  private isSelectedServerProfile(index: number): boolean {
+    return index >= 0 && index === this.selectedServerProfileIndex &&
+      index < this.serverProfiles.length;
+  }
+
+  /**
+   * What the API key field shows.
+   *
+   * The field is a plain input rather than `InputType.Password`: that type draws
+   * its own reveal icon, which would sit next to the button below. The key is
+   * never echoed back, only a mask of the same length.
+   */
+  private apiKeyDisplayText(): string {
+    if (this.isApiKeyVisible) {
+      return this.apiKey;
     }
-    return localized('新增服务器');
+    return this.apiKey.length === 0 ? '' : '*'.repeat(this.apiKey.length);
+  }
+
+  /** Second line of a saved endpoint; omitted when it would repeat the title. */
+  private serverProfileSubtitle(profile: ServerProfile): string {
+    if (profile.serverUrl === profile.name || profile.serverUrl.length === 0) {
+      return localized('已保存', 'Saved');
+    }
+    return profile.serverUrl;
   }
 
   private selectServerProfile(index: number): void {
@@ -918,16 +1329,16 @@ export struct SettingsPage {
     this.serverMessage = '';
   }
 
-  private async confirmDeleteServer(): Promise<void> {
-    if (this.selectedServerProfileIndex < 0 ||
-      this.selectedServerProfileIndex >= this.serverProfiles.length) {
+  private async confirmDeleteServer(index: number): Promise<void> {
+    if (index < 0 || index >= this.serverProfiles.length) {
       return;
     }
+    const target: ServerProfile = this.serverProfiles[index];
     try {
       const result: CacheDialogResult = await
         (this.getUIContext().getPromptAction().showDialog({
           title: localized('删除当前服务器'),
-          message: localized('确认删除当前服务器？'),
+          message: `${target.name}\n${localized('确认删除当前服务器？')}`,
           buttons: [
             { text: localized('取消'), color: $r('app.color.text_secondary') },
             { text: localized('删除'), color: $r('app.color.error') }
@@ -936,9 +1347,13 @@ export struct SettingsPage {
       if (result.index !== 1) {
         return;
       }
-      const profile: ServerProfile = this.serverProfiles[this.selectedServerProfileIndex];
       this.isServerBusy = true;
-      await this.serverRepository().deleteProfile(profile.id);
+      await this.serverRepository().deleteProfile(target.id);
+      // The endpoint is gone, so its cached index would never be read again —
+      // and it holds the whole library in plain JSON. Offline copies the user
+      // downloaded are kept, but the folders of downloads that never completed
+      // are reclaimed.
+      this.removeServerCache(target.serverUrl);
       this.serverProfiles = await this.serverRepository().loadProfiles();
       const active: ServerProfile | undefined = await this.serverRepository().loadActiveProfile();
       if (active === undefined) {
@@ -951,6 +1366,16 @@ export struct SettingsPage {
         this.serverUrl = active.serverUrl;
         this.apiKey = active.apiKey;
       }
+      // Removing a profile also changes which endpoint the library page is
+      // talking to, and the repository has already switched or cleared it. The
+      // host page only learns about a server through these two callbacks, so
+      // without them it would keep querying the deleted address with the API key
+      // still in memory.
+      if (active === undefined) {
+        this.onServerCleared();
+      } else {
+        this.onServerSaved(active.toConfig());
+      }
       this.serverMessageIsError = false;
       this.serverMessage = localized('服务器配置已删除');
     } catch (error) {
@@ -961,8 +1386,29 @@ export struct SettingsPage {
     }
   }
 
-  private async refreshCacheStats(): Promise<void> {
+  /**
+   * Drops the local state that only made sense for one server.
+   *
+   * Explictly downloaded archives are left alone — they are the user's data —
+   * but the cached index and the folders of downloads that never finished are
+   * removed, so removing a server does not leave its library behind in plain
+   * JSON or keep reclaimable space forever.
+   */
+  private removeServerCache(serverUrl: string): void {
+    if (serverUrl.length === 0) {
+      return;
+    }
     try {
+      const context: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext;
+      new LibraryIndexCacheRepository(context, serverUrl).clearForServer(serverUrl);
+      new OfflineArchiveCache(context, serverUrl).pruneOrphans();
+    } catch (error) {
+      // Cache cleanup must not block the profile from being removed.
+    }
+  }
+
+  private async refreshCacheStats(): Promise<void> {    try {
       const stats: ImageCacheStats = await this.imageCache().statsAsync();
       this.cacheSizeText = this.formatBytes(stats.bytes);
       this.cacheFileCount = stats.fileCount;
@@ -972,6 +1418,53 @@ export struct SettingsPage {
       this.cacheFileCount = 0;
       this.cacheMessageIsError = true;
       this.cacheMessage = localized('暂时无法读取本地缓存信息');
+    }
+  }
+
+  /**
+   * Reclaims the offline folders of downloads that never completed.
+   *
+   * They have no manifest, so the downloaded-archives page cannot list them and
+   * nothing else deleted them: their pages sat in the sandbox forever.
+   */
+  private pruneIncompleteDownloads(): void {
+    try {
+      const context: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const serverUrl: string =
+        this.serverUrl.length > 0 ? this.serverUrl : this.activeServerUrl();
+      if (serverUrl.length === 0) {
+        return;
+      }
+      new OfflineArchiveCache(context, serverUrl).pruneOrphans();
+    } catch (error) {
+      // Reclaiming space must not turn a successful clear into a failure.
+    }
+  }
+
+  /** URL of the profile that is currently in use, or ''. */
+  private activeServerUrl(): string {
+    if (this.selectedServerProfileIndex >= 0 &&
+      this.selectedServerProfileIndex < this.serverProfiles.length) {
+      return this.serverProfiles[this.selectedServerProfileIndex].serverUrl;
+    }
+    return this.serverProfiles.length > 0 ? this.serverProfiles[0].serverUrl : '';
+  }
+
+  /**
+   * Drops the cached library indexes.
+   *
+   * They are a copy of the server's library, so clearing the image cache clears
+   * these too rather than leaving another unmanaged copy on disk; the index is
+   * fetched again on the next library visit.
+   */
+  private clearIndexCache(): void {
+    try {
+      const context: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext;
+      new LibraryIndexCacheRepository(context, this.activeServerUrl()).clearAll();
+    } catch (error) {
+      // The image cache is already cleared; the index stays as a fallback.
     }
   }
 
@@ -994,14 +1487,19 @@ export struct SettingsPage {
     }
   }
 
-  private clearImageCache(): void {
+  private async clearImageCache(): Promise<void> {
     if (this.isCacheBusy) {
       return;
     }
     this.isCacheBusy = true;
     this.cacheMessage = '';
     try {
-      this.imageCache().clearAll();
+      // Off the UI thread: this walks every cached cover and page. Folders left
+      // by downloads that never finished are reclaimed too, since nothing else
+      // can reach them.
+      await this.imageCache().clearAllAsync();
+      this.pruneIncompleteDownloads();
+      this.clearIndexCache();
       this.cacheSizeText = '0 B';
       this.cacheFileCount = 0;
       this.cacheMessageIsError = false;
@@ -1123,7 +1621,8 @@ export struct SettingsPage {
         current.sortAscending,
         this.hideCompleted,
         this.gridLayout,
-        this.gridColumns
+        this.gridColumns,
+        this.coverCrop
       );
       await this.libraryRepository().save(updated);
       this.onLibrarySettingsSaved(updated);

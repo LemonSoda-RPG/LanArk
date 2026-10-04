@@ -21,11 +21,13 @@ import {
 import { ArchiveReaderPage } from '../features/reader/ArchiveReaderPage';
 import { ArchiveInfoPage } from '../features/archive/ArchiveInfoPage';
 import { SettingsPage } from '../features/settings/SettingsPage';
+import { LogPage } from '../features/settings/LogPage';
 import { DownloadedArchivesPage } from '../features/download/DownloadedArchivesPage';
 import { DownloadManagerPage } from '../features/download/DownloadManagerPage';
 import { HistoryPage } from '../features/history/HistoryPage';
 import { LibraryProgressOverlayRepository } from '../data/cache/LibraryProgressOverlayRepository';
 import { ArchiveCoverView } from '../features/library/ArchiveCoverView';
+import { AppLog } from '../data/log/AppLog';
 import { describeUserFacingError, localized } from '../common/Localization';
 
 /** Index of the "Random" entry in `sortModeLabels()`. */
@@ -145,6 +147,8 @@ struct Index {
   @State private hideCompleted: boolean = false;
   @State private gridLayout: boolean = true;
   @State private gridColumns: number = 0;
+  // Whether covers fill their card or are shown whole (library setting).
+  @State private coverCrop: boolean = true;
   @State private libraryContentWidth: number = 0;
   private allArchives: Array<ArchiveItem> = [];
   private completeArchiveIndex: Array<ArchiveItem> = [];
@@ -170,9 +174,39 @@ struct Index {
   private libraryWindowRequestId: number = 0;
 
   aboutToAppear(): void {
+    this.beginReaderCacheSession();
     this.restoreLibrarySettings();
     this.restoreConfig();
     this.refreshLibraryWindowSize();
+  }
+
+  /**
+   * Starts this process' reading session and sweeps left-over reader pages.
+   *
+   * The reader drops the pages of a document when it is closed, so a stale
+   * folder only survives a process that was killed while reading, or a build
+   * that did not clean up at all. Nothing can be reading this early, and the
+   * session identifier makes this run write into a folder of its own, so the
+   * sweep can never delete pages of a document opened afterwards.
+   */
+  private beginReaderCacheSession(): void {
+    AppLog.info('index', 'library page appeared');
+    try {
+      AppStorage.setOrCreate(
+        'lanarkReaderCacheSession',
+        ImageDiskCache.newSessionToken()
+      );
+    } catch (error) {
+      // Without an identifier a reader falls back to the shared folder; the
+      // mtime guard in the cache still keeps a cleanup away from new pages.
+    }
+    try {
+      const context: common.UIAbilityContext =
+        this.getUIContext().getHostContext() as common.UIAbilityContext;
+      new ImageDiskCache(context, this.serverUrl).clearReaderRootAsync().catch(() => {});
+    } catch (error) {
+      // Stale pages only cost disk space; reading must not wait for them.
+    }
   }
 
   onBackPress(): boolean {
@@ -261,6 +295,8 @@ struct Index {
       DownloadedArchivesPage()
     } else if (name === 'DownloadManager') {
       DownloadManagerPage()
+    } else if (name === 'DiagnosticLog') {
+      LogPage()
     } else if (name === 'History') {
       HistoryPage({
         // A provider rather than a snapshot: the page re-reads the list every
@@ -776,7 +812,8 @@ struct Index {
         archiveId: archive.id,
         fileExtension: archive.fileExtension,
         serverUrl: this.serverUrl,
-        apiKey: this.apiKey
+        apiKey: this.apiKey,
+        cropCover: this.coverCrop
       })
 
       Column({ space: 6 }) {
@@ -852,7 +889,8 @@ struct Index {
           serverUrl: this.serverUrl,
           apiKey: this.apiKey,
           coverWidth: '100%',
-          coverHeight: '100%'
+          coverHeight: '100%',
+          cropCover: this.coverCrop
         })
         ArchiveNewBadge({
           archive: archive,
@@ -978,13 +1016,30 @@ struct Index {
    * `silent` marks a refresh that runs while the user is already looking at a
    * library: it must not swap the page for the loading state, and a failure must
    * leave the cached content alone instead of replacing it with an error.
+   *
+   * It also must not clear what is on screen. An explicit refresh used to empty
+   * the grid and show the loading screen for the whole request — tens of seconds
+   * on a large library — even though a usable list was already there from the
+   * cache. Now the list stays readable and clickable throughout: only an empty
+   * library shows the loading state, and the new listing is installed in one step
+   * when it arrives.
+   *
+   * The listing is fetched in one request rather than in pages, because the
+   * search endpoint caps every page at the server's `archives_per_page` setting
+   * and ignores the requested length; on this server that would mean ~90 requests
+   * to rebuild the library, which is slower in total than asking once.
    */
   private async loadLibrary(client: LanraragiApiClient, silent: boolean = false): Promise<void> {
     this.libraryNotice = '';
+    const hadContent: boolean = this.completeArchiveIndex.length > 0;
     if (!silent) {
-      // Only an explicit refresh may swap the page for the loading state.
-      this.isLibraryLoading = true;
       this.libraryError = '';
+      // Only an empty library gets the loading screen: with content on screen,
+      // hiding it is exactly the regression this avoids.
+      this.isLibraryLoading = !hadContent;
+      if (hadContent) {
+        this.libraryNotice = localized('正在刷新档案库…');
+      }
     }
     let failure: string = '';
     try {
@@ -995,35 +1050,17 @@ struct Index {
       } catch (error) {
         // Keep the last local category list if only the category request fails.
       }
-      this.completeArchiveIndex = loadedArchives;
-      this.allArchives = loadedArchives;
-      this.categories = loadedCategories;
-      this.selectedCategoryId = '';
-      this.selectedCategoryName = '全部';
-      this.searchText = '';
-      this.reindexArchiveLookup(loadedArchives);
-      try {
-        this.indexCacheRepository(this.serverUrl).save(
-          loadedArchives,
-          loadedCategories
-        );
-        // The index now embeds current progress, so the overlay is redundant.
-        this.pendingProgress = {};
-        this.pendingReadTimes = {};
-        await this.progressOverlayRepository().clear();
-      } catch (error) {
-        // A successful refresh remains usable if local index persistence fails.
-      }
-      this.applyArchiveFilter();
-      this.libraryError = '';
+      await this.installLibrary(loadedArchives, loadedCategories, silent);
     } catch (error) {
       failure = this.describeError(error);
+      AppLog.error('library', `load failed: ${AppLog.describe(error)}`);
     } finally {
       if (!silent) {
         this.isLibraryLoading = false;
       }
     }
     if (failure.length === 0) {
+      this.libraryNotice = '';
       return;
     }
     if (silent && this.completeArchiveIndex.length > 0) {
@@ -1035,6 +1072,45 @@ struct Index {
     } else {
       this.libraryError = failure;
     }
+  }
+
+  /**
+   * Publishes a freshly fetched library.
+   *
+   * The filter state is reset here and only here: a background refresh that
+   * happens to land while someone is browsing must not throw away what they
+   * selected.
+   */
+  private async installLibrary(archives: Array<ArchiveItem>,
+    categories: Array<CategoryItem>, silent: boolean): Promise<void> {
+    this.completeArchiveIndex = archives;
+    this.allArchives = archives;
+    this.categories = categories;
+    this.selectedCategoryId = '';
+    this.selectedCategoryName = '全部';
+    this.searchText = '';
+    this.reindexArchiveLookup(archives);
+    // Positions recorded while this refresh was in flight are newer than what
+    // the server just reported, so they are folded into the new instances
+    // before the overlay is dropped. The refresh takes up to four minutes to
+    // time out, so a page turn during it is an ordinary event, and a server
+    // that keeps progress on the client reports zero here.
+    this.mergePendingProgress(archives);
+    try {
+      this.indexCacheRepository(this.serverUrl).save(archives, categories);
+      // The rows above are in the index that was just written, so the overlay
+      // no longer holds anything the index does not.
+      this.pendingProgress = {};
+      this.pendingReadTimes = {};
+      await this.progressOverlayRepository().clear();
+    } catch (error) {
+      // A successful refresh remains usable if local index persistence fails.
+    }
+    this.applyArchiveFilter();
+    this.libraryError = '';
+    AppLog.info('library',
+      `loaded ${archives.length} archives, ${categories.length} categories` +
+      `${silent ? ' (background refresh)' : ''}`);
   }
 
   private showToast(message: string): void {
@@ -1077,6 +1153,27 @@ struct Index {
     }
   }
 
+  /**
+   * Folds locally recorded progress into freshly loaded archives.
+   *
+   * The overlay only covers the window between a page turn and the next full
+   * refresh, so every entry in it is newer than the server's own numbers: page
+   * positions are taken as a maximum and read times only ever move forward.
+   */
+  private mergePendingProgress(archives: Array<ArchiveItem>): void {
+    for (let index: number = 0; index < archives.length; index += 1) {
+      const archive: ArchiveItem = archives[index];
+      const page: number | undefined = this.pendingProgress[archive.id];
+      if (page !== undefined && Number.isFinite(page) && page > archive.progress) {
+        archive.setProgress(page);
+      }
+      const readAt: number | undefined = this.pendingReadTimes[archive.id];
+      if (readAt !== undefined && Number.isFinite(readAt) && readAt > 0) {
+        archive.markReadAt(readAt);
+      }
+    }
+  }
+
   /** Re-applies page positions recorded after the cached index was written. */
   private async applyProgressOverlay(): Promise<void> {
     const repository: LibraryProgressOverlayRepository = this.progressOverlayRepository();
@@ -1102,6 +1199,31 @@ struct Index {
     if (applied && this.hideCompleted) {
       this.applyArchiveFilter();
     }
+  }
+
+  /**
+   * Archives belonging to one category.
+   *
+   * The category list only carries archive IDs for static categories: LANraragi
+   * matches a dynamic category (one with a `search` rule) on the server, so its
+   * `archives` field comes back empty and filtering the local index by it would
+   * show nothing at all. Dynamic categories are therefore resolved through
+   * `/api/search`, which returns the full archive objects.
+   */
+  private async archivesOfCategory(
+    categoryId: string,
+    category: CategoryItem
+  ): Promise<Array<ArchiveItem>> {
+    if (category.search.length === 0) {
+      const archiveIds: Array<string> = category.archiveIds;
+      return this.completeArchiveIndex.filter((archive: ArchiveItem) => {
+        return archiveIds.indexOf(archive.id) >= 0;
+      });
+    }
+    const client: LanraragiApiClient =
+      new LanraragiApiClient(this.serverUrl, this.apiKey);
+    AppLog.info('library', `dynamic category ${categoryId} "${category.search}" via /api/search`);
+    return client.fetchArchivesForCategory(categoryId);
   }
 
   private progressOverlayRepository(): LibraryProgressOverlayRepository {
@@ -1131,10 +1253,7 @@ struct Index {
         if (selectedCategory === undefined) {
           throw new Error(localized('本地分类信息不存在，请手动刷新书库'));
         }
-        const archiveIds: Array<string> = selectedCategory.archiveIds;
-        this.allArchives = this.completeArchiveIndex.filter((archive: ArchiveItem) => {
-          return archiveIds.indexOf(archive.id) >= 0;
-        });
+        this.allArchives = await this.archivesOfCategory(categoryId, selectedCategory);
       }
       this.selectedCategoryId = categoryId;
       this.selectedCategoryName = categoryName;
@@ -1410,12 +1529,25 @@ struct Index {
         this.getUIContext().getHostContext() as common.UIAbilityContext;
       const cache: ImageDiskCache = new ImageDiskCache(context, this.serverUrl);
       cache.clearArchiveCover(archiveId);
-      cache.clearArchivePages(archiveId);
+      // A long document holds hundreds of files, which is why this does not run
+      // on the UI thread; the card is already gone either way.
+      cache.clearArchivePagesAsync(archiveId).catch((error: Object) => {
+        AppLog.warn('library', `page cache cleanup failed for ${archiveId}: ` +
+          `${AppLog.describe(error)}`);
+      });
       this.indexCacheRepository(this.serverUrl).save(
         this.completeArchiveIndex,
         this.categories
       );
+      // The local side of a delete: recorded because it is where leftovers come
+      // from. A card that reappears after a refresh, or disk that never shrinks,
+      // is answered by whether these three steps ran.
+      AppLog.warn('library',
+        `archive ${archiveId} removed locally: index=${this.completeArchiveIndex.length} ` +
+        `categories=${this.categories.length} cover+pages cleared`);
     } catch (error) {
+      AppLog.error('library',
+        `local cleanup after deleting ${archiveId} failed: ${AppLog.describe(error)}`);
       // The server deletion succeeded; local cleanup failure must not restore the card.
     }
     this.pathStack.clear();
@@ -1450,6 +1582,7 @@ struct Index {
     this.hideCompleted = settings.hideCompleted;
     this.gridLayout = settings.gridLayout;
     this.gridColumns = settings.gridColumns;
+    this.coverCrop = settings.coverCrop;
     if (this.allArchives.length > 0) {
       this.applyArchiveFilter();
     }
@@ -1462,7 +1595,8 @@ struct Index {
         this.sortAscending,
         this.hideCompleted,
         this.gridLayout,
-        this.gridColumns
+        this.gridColumns,
+        this.coverCrop
       ));
     } catch (error) {
       // A sort action remains usable even when its preference cannot be saved.

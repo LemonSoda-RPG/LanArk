@@ -10,6 +10,7 @@ import {
   ServerConfig
 } from '../../domain/model/LanraragiModels';
 import { describeUserFacingError, isEnglishSystemLanguage, localized } from '../../common/Localization';
+import { AppLog } from '../../data/log/AppLog';
 
 function emptyArchive(): ArchiveItem {
   const payload: ArchiveIndexPayload = {
@@ -391,14 +392,19 @@ export struct ArchiveInfoPage {
   private async deleteArchive(): Promise<void> {
     this.isDeleting = true;
     this.deleteError = '';
+    AppLog.warn('archive', `delete requested for ${this.archive.id} ` +
+      `"${this.archive.title}" offline=${this.offline} downloaded=${this.isDownloaded}`);
     try {
       const context: common.UIAbilityContext =
         this.getUIContext().getHostContext() as common.UIAbilityContext;
       if (this.offline && this.offlineServerUrl.length > 0) {
+        // Stop the worker first: one that is mid-fetch would otherwise recreate
+        // the files removed below.
+        await DownloadManager.cancelAndWait(this.archive.id);
         new OfflineArchiveCache(context, this.offlineServerUrl).clearArchive(this.archive.id);
-        await DownloadManager.forget(this.archive.id);
         await new OfflineProgressRepository(context).clear(this.archive.id);
         this.isDownloaded = false;
+        AppLog.warn('archive', `local download of ${this.archive.id} deleted (offline path)`);
         this.onLocalDownloadDeleted(this.archive.id);
         return;
       }
@@ -406,27 +412,34 @@ export struct ArchiveInfoPage {
       if (this.isDownloaded || this.offline) {
         const storageServerUrl: string = this.offlineServerUrl.length > 0 ?
           this.offlineServerUrl : config.serverUrl;
+        await DownloadManager.cancelAndWait(this.archive.id);
         new OfflineArchiveCache(context, storageServerUrl).clearArchive(this.archive.id);
-        await DownloadManager.forget(this.archive.id);
         await new OfflineProgressRepository(context).clear(this.archive.id);
         this.isDownloaded = false;
+        AppLog.warn('archive',
+          `local download of ${this.archive.id} deleted (server archive kept)`);
         this.onLocalDownloadDeleted(this.archive.id);
         return;
       }
       // Never fall through to deleting the server copy while the local state is
       // unknown or a download is still writing files for this archive.
       if (DownloadManager.isActive(this.archive.id) || !this.isDownloadStateKnown) {
+        AppLog.warn('archive',
+          `delete of ${this.archive.id} refused: active=${DownloadManager.isActive(this.archive.id)} ` +
+          `stateKnown=${this.isDownloadStateKnown}`);
         this.deleteError = localized('无法确认本地下载状态，请稍后重试');
         return;
       }
       const client: LanraragiApiClient =
         new LanraragiApiClient(config.serverUrl, config.apiKey);
       await client.deleteArchive(this.archive.id);
+      await DownloadManager.cancelAndWait(this.archive.id);
       new OfflineArchiveCache(context, config.serverUrl).clearArchive(this.archive.id);
-      await DownloadManager.forget(this.archive.id);
       await new OfflineProgressRepository(context).clear(this.archive.id);
+      AppLog.warn('archive', `server archive ${this.archive.id} deleted and local copies cleared`);
       this.onArchiveDeleted(this.archive.id);
     } catch (error) {
+      AppLog.error('archive', `delete of ${this.archive.id} failed: ${AppLog.describe(error)}`);
       this.deleteError = this.describeError(error);
     } finally {
       this.isDeleting = false;

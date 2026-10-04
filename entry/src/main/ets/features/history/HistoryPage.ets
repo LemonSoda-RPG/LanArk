@@ -51,6 +51,7 @@ struct HistoryGridCard {
   @ObjectLink archive: ArchiveItem;
   serverUrl: string = '';
   apiKey: string = '';
+  coverCrop: boolean = true;
 
   build() {
     Column({ space: 6 }) {
@@ -61,7 +62,8 @@ struct HistoryGridCard {
           serverUrl: this.serverUrl,
           apiKey: this.apiKey,
           coverWidth: '100%',
-          coverHeight: '100%'
+          coverHeight: '100%',
+          cropCover: this.coverCrop
         })
       }
       .width('100%')
@@ -169,6 +171,8 @@ export struct HistoryPage {
   // width-based rule below decides, exactly as it does on the library page.
   @State private preferredColumns: number = 0;
   @State private gridColumns: number = 0;
+  // Same cover treatment as the library grid (library setting).
+  @State private coverCrop: boolean = true;
   private gridContentWidth: number = 0;
   private dataSource: HistoryDataSource = new HistoryDataSource();
 
@@ -250,7 +254,8 @@ export struct HistoryPage {
                 HistoryGridCard({
                   archive: archive,
                   serverUrl: this.serverUrl,
-                  apiKey: this.apiKey
+                  apiKey: this.apiKey,
+                  coverCrop: this.coverCrop
                 })
               }
               .onClick(() => {
@@ -307,6 +312,7 @@ export struct HistoryPage {
     try {
       const settings: LibrarySettings = await new LibrarySettingsRepository(context).load();
       this.preferredColumns = settings.gridColumns;
+      this.coverCrop = settings.coverCrop;
     } catch (error) {
       // Fall back to the width-based column count.
     }

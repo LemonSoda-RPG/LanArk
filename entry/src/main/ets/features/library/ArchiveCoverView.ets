@@ -18,6 +18,8 @@ export struct ArchiveCoverView {
   apiKey: string = '';
   coverWidth: number | string = 68;
   coverHeight: number | string = 92;
+  // Fills the card and crops, or fits the whole cover inside it.
+  @Prop cropCover: boolean = true;
   @State private cover: image.PixelMap | undefined = undefined;
   @State private isLoading: boolean = false;
   // Set when the component is destroyed. A cover decode that is still awaiting
@@ -46,7 +48,9 @@ export struct ArchiveCoverView {
         Image(this.cover as image.PixelMap)
           .width('100%')
           .height('100%')
-          .objectFit(ImageFit.Cover)
+          // Cover fills the card and trims the overflow; Contain keeps the whole
+          // artwork visible and leaves the card's own background around it.
+          .objectFit(this.cropCover ? ImageFit.Cover : ImageFit.Contain)
       } else {
         Text(this.fileExtension.toUpperCase())
           .copyOption(CopyOptions.LocalDevice)
@@ -113,10 +117,19 @@ export struct ArchiveCoverView {
           decoded.release().catch(() => {});
           return;
         }
-        this.cover = decoded;
+        // Written before the state takes ownership: publishing the PixelMap
+        // first would let aboutToBeDeleted release it while the encoder is still
+        // reading it, and a shortened encode would be cached for good.
         if (shouldCache) {
           await cache.writeCover(this.archiveId, decoded);
         }
+        if (this.destroyed) {
+          // Destroyed during the encode; the cache is written, so only the
+          // decode result is left to drop.
+          decoded.release().catch(() => {});
+          return;
+        }
+        this.cover = decoded;
       } finally {
         await source.release();
       }
