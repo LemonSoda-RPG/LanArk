@@ -9,6 +9,7 @@ import {
   ServerConfig
 } from '../../domain/model/LanraragiModels';
 import { describeUserFacingError, localized } from '../../common/Localization';
+import { AppLog } from '../log/AppLog';
 
 export type DownloadTaskStatus = 'queued' | 'downloading' | 'completed' | 'failed';
 
@@ -142,6 +143,7 @@ export class DownloadManager {
     if (existing === undefined) {
       DownloadManager.tasks.push(task);
     }
+    AppLog.info('download', `start ${archive.id} "${archive.title}" pages=${archive.pageCount}`);
     // The promise is kept on the task so `forget` can wait for the worker to
     // stop before the caller deletes the files it is still writing.
     task.settled = DownloadManager.run(context, config, archive, task)
@@ -151,24 +153,55 @@ export class DownloadManager {
     DownloadManager.notifyChanged();
   }
 
-  static async forget(archiveId: string): Promise<void> {
+  /**
+   * Asks the worker of one archive to stop, and removes it from the queue.
+   *
+   * The flag is set synchronously, so a worker waiting on a page fetch returns
+   * without writing anything once that fetch resolves. Callers that are about to
+   * delete the files should use `cancelAndWait` instead, which also waits for
+   * that fetch to come back.
+   */
+  static forget(archiveId: string): void {
+    DownloadManager.cancel(archiveId);
+    DownloadManager.remove(archiveId);
+  }
+
+  /** Sets the stop flag, without touching the task list. */
+  static cancel(archiveId: string): void {
     const task: DownloadTask | undefined = DownloadManager.tasks.find((item: DownloadTask) => {
       return item.archiveId === archiveId;
     });
     if (task !== undefined) {
       task.cancelled = true;
-      if (task.settled !== undefined) {
-        try {
-          await task.settled;
-        } catch (error) {
-          // A failed worker is already reported through the task status.
-        }
-      }
     }
+  }
+
+  private static remove(archiveId: string): void {
     DownloadManager.tasks = DownloadManager.tasks.filter((item: DownloadTask) => {
       return item.archiveId !== archiveId;
     });
     DownloadManager.notifyChanged();
+  }
+
+  /**
+   * Stops the worker and waits for it to actually finish.
+   *
+   * A delete needs this: the worker may be blocked on a page fetch, and only
+   * after it returns is it guaranteed not to write another file.
+   */
+  static async cancelAndWait(archiveId: string): Promise<void> {
+    const task: DownloadTask | undefined = DownloadManager.tasks.find((item: DownloadTask) => {
+      return item.archiveId === archiveId;
+    });
+    DownloadManager.cancel(archiveId);
+    if (task !== undefined && task.settled !== undefined) {
+      try {
+        await task.settled;
+      } catch (error) {
+        // A failed worker is already reported through the task status.
+      }
+    }
+    DownloadManager.remove(archiveId);
   }
 
   /** True while a download for this archive is queued or running. */
@@ -210,6 +243,12 @@ export class DownloadManager {
       const page: ReaderPage = pages[index];
       if (cache.readPage(archive.id, page.pageNumber) === undefined) {
         const data: ArrayBuffer | undefined = await client.fetchArchivePage(page, archive.id);
+        // The flag is re-read after every await: this page's fetch can be where
+        // a delete happened, and writing now would recreate files the caller has
+        // already removed.
+        if (task.cancelled) {
+          return;
+        }
         if (data === undefined) {
           throw new Error(`${localized('下载页面失败')} ${page.pageNumber}`);
         }
@@ -219,11 +258,17 @@ export class DownloadManager {
       task.updatedAt = Date.now();
       DownloadManager.notifyChanged();
     }
+    if (task.cancelled) {
+      // The loop finished, but the task was removed while the last page was in
+      // flight. Committing the manifest here would bring the archive back.
+      return;
+    }
     // The manifest is committed last, so an interrupted download never appears
     // as a usable offline archive.
     cache.saveManifest(archive, pages);
     task.completedPages = pages.length;
     task.status = 'completed';
+    AppLog.info('download', `completed ${archive.id}: ${pages.length} pages`);
     task.errorMessage = '';
     task.updatedAt = Date.now();
     DownloadManager.notifyChanged();
@@ -267,6 +312,8 @@ export class DownloadManager {
   }
 
   private static fail(task: DownloadTask, error: Object): void {
+    AppLog.error('download', `failed ${task.archiveId} at page ${task.completedPages}: ` +
+      `${AppLog.describe(error)}`);
     task.status = 'failed';
     task.errorMessage = describeUserFacingError(error, localized('下载档案失败'));
     task.updatedAt = Date.now();

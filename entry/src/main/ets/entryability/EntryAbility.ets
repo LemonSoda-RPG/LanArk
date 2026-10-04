@@ -1,11 +1,19 @@
 import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
+import { AppLog } from '../data/log/AppLog';
 
 const DOMAIN: number = 0x0000;
 
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    // Started here so the log covers the whole process, including window setup.
+    AppLog.initialize(this.context);
+    // Unconditional, unlike the log's own entries: it proves the module ran even
+    // when logging is switched off.
+    hilog.info(DOMAIN, 'LanArk', 'log init: enabled=%{public}s verbose=%{public}s',
+      `${AppLog.isEnabled()}`, `${AppLog.isVerbose()}`);
+    AppLog.info('ability', 'onCreate');
     AppStorage.setOrCreate('lanarkReaderFullscreen', false);
     try {
       this.context.getApplicationContext()

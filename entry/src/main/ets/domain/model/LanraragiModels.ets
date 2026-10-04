@@ -267,6 +267,23 @@ export interface ArchiveSearchPayload {
   recordsTotal: number;
 }
 
+/**
+ * A batch of library entries, plus the size of the whole result.
+ *
+ * `total` is what tells the caller whether another batch is worth asking for.
+ * The server caps every page at its own `archives_per_page` setting and ignores
+ * a larger request, so a batch arrives with whatever it decides to send.
+ */
+export class ArchiveIndexPageResult {
+  readonly archives: Array<ArchiveItem>;
+  readonly total: number;
+
+  constructor(archives: Array<ArchiveItem>, total: number) {
+    this.archives = archives;
+    this.total = total;
+  }
+}
+
 export interface CategoryPayload {
   archives?: Array<string>;
   id: string;
@@ -315,6 +332,28 @@ export class CategoryItem {
 
 export interface ArchivePagesPayload {
   pages: Array<string>;
+  /**
+   * Present when LANraragi has to extract the archive first: it answers with an
+   * empty `pages` and a Minion job, and the caller is expected to come back.
+   */
+  job?: number;
+}
+
+/** Result of asking for an archive's page list. */
+export class ArchivePagesResult {
+  readonly pages: Array<ReaderPage>;
+  /** Minion job extracting the archive, or 0 when there is none. */
+  readonly jobId: number;
+
+  constructor(pages: Array<ReaderPage>, jobId: number = 0) {
+    this.pages = pages;
+    this.jobId = jobId;
+  }
+
+  /** True when the server is still preparing this archive. */
+  get isPreparing(): boolean {
+    return this.pages.length === 0 && this.jobId > 0;
+  }
 }
 
 export class ReaderPage {

@@ -1,10 +1,12 @@
 import { common } from '@kit.AbilityKit';
+import { util } from '@kit.ArkTS';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import {
   ArchiveIndexPayload,
   ArchiveItem,
   ReaderPage
 } from '../../domain/model/LanraragiModels';
+import { localized } from '../../common/Localization';
 
 const OFFLINE_ROOT_FOLDER_NAME: string = 'lanark-offline-archives';
 
@@ -139,11 +141,29 @@ export class OfflineArchiveCache {
   countDownloadedPages(archiveId: string, pages: Array<ReaderPage>): number {
     let count: number = 0;
     pages.forEach((page: ReaderPage) => {
-      if (this.exists(this.pagePath(archiveId, page.pageNumber))) {
+      if (this.isReadablePage(this.pagePath(archiveId, page.pageNumber))) {
         count += 1;
       }
     });
     return count;
+  }
+
+  /**
+   * Whether a page file is one this app can actually read.
+   *
+   * Judging by existence alone marked an archive complete while a page the
+   * reader refuses (empty, or past the size ceiling) could never be displayed.
+   */
+  private isReadablePage(path: string): boolean {
+    try {
+      if (!this.exists(path)) {
+        return false;
+      }
+      const size: number = fs.statSync(path).size;
+      return size > 0 && size <= MAX_CACHED_FILE_BYTES;
+    } catch (error) {
+      return false;
+    }
   }
 
   isDownloaded(archiveId: string): boolean {
@@ -169,6 +189,67 @@ export class OfflineArchiveCache {
     }
   }
 
+  /**
+   * Removes archive folders that no longer have a usable manifest.
+   *
+   * A download writes its manifest last, so an interrupted or failed one leaves
+   * pages on disk that no listing shows — `listRecords` needs a manifest to
+   * return a record. Without this sweep those pages are invisible and cannot be
+   * deleted from the UI, and they are never reclaimed.
+   */
+  pruneOrphans(): void {
+    let children: Array<string> = [];
+    try {
+      if (!this.exists(this.serverPath)) {
+        return;
+      }
+      children = fs.listFileSync(this.serverPath);
+    } catch (error) {
+      return;
+    }
+    for (const name of children) {
+      const archivePath: string = `${this.serverPath}/${name}`;
+      try {
+        if (!fs.statSync(archivePath).isDirectory()) {
+          continue;
+        }
+        if (this.readRecord(name) !== undefined) {
+          continue;
+        }
+        this.removeDirectoryContents(archivePath);
+        fs.rmdirSync(archivePath);
+      } catch (error) {
+        // One stubborn folder must not stop the rest of the sweep.
+      }
+    }
+  }
+
+  /** Removes every offline copy kept for one server URL. */
+  clearServer(serverUrl: string): void {
+    const path: string = `${this.rootPath}/${this.serverNamespace(serverUrl)}`;
+    this.removeValidated(path, `${this.rootPath}/`);
+  }
+
+  /** Removes every offline copy, for every server. */
+  clearAll(): void {
+    this.removeValidated(this.rootPath, `${this.rootPath}`);
+  }
+
+  /** Deletes a directory tree, refusing anything outside `allowedPrefix`. */
+  private removeValidated(path: string, allowedPrefix: string): void {
+    if (!path.startsWith(allowedPrefix)) {
+      return;
+    }
+    this.removeDirectoryContents(path);
+    if (this.exists(path)) {
+      try {
+        fs.rmdirSync(path);
+      } catch (error) {
+        // A directory that still holds files stays for the next attempt.
+      }
+    }
+  }
+
   private archivePath(archiveId: string): string {
     return `${this.serverPath}/${this.safePathPart(archiveId)}`;
   }
@@ -187,7 +268,15 @@ export class OfflineArchiveCache {
         return undefined;
       }
       const size: number = fs.statSync(path).size;
-      if (size <= 0 || size > MAX_CACHED_FILE_BYTES) {
+      if (size <= 0) {
+        return undefined;
+      }
+      if (size > MAX_CACHED_FILE_BYTES) {
+        // Larger than anything this app will read. Treated as missing *and*
+        // discarded, because the download path skips pages that "exist": leaving
+        // it would make the archive look complete while this page can never be
+        // read or re-fetched.
+        this.deleteFileIfExists(path);
         return undefined;
       }
       const file: fs.File = fs.openSync(path, fs.OpenMode.READ_ONLY);
@@ -227,7 +316,13 @@ export class OfflineArchiveCache {
       );
       temporaryExists = true;
       try {
-        fs.writeSync(file.fd, data);
+        const written: number = fs.writeSync(file.fd, data);
+        // A short write (disk full, for instance) must not be renamed over the
+        // real page: the archive would claim to be downloaded while the page can
+        // never be decoded, and nothing would ever re-fetch it.
+        if (written !== data.byteLength) {
+          throw new Error(localized('离线页面写入不完整', 'The offline page was written incompletely'));
+        }
       } finally {
         fs.closeSync(file);
       }
@@ -259,7 +354,15 @@ export class OfflineArchiveCache {
       );
       temporaryExists = true;
       try {
-        fs.writeSync(file.fd, value);
+        // Written as bytes so the expected length is exact: an incomplete
+        // manifest would either hide the archive or claim pages that are not
+        // there.
+        const encoded: Uint8Array = new util.TextEncoder().encodeInto(value);
+        const written: number = fs.writeSync(file.fd, encoded.buffer as ArrayBuffer);
+        if (written !== encoded.byteLength) {
+          throw new Error(localized('离线清单写入不完整', 'The offline manifest was written incompletely'));
+        }
+        fs.fsyncSync(file.fd);
       } finally {
         fs.closeSync(file);
       }
@@ -313,6 +416,16 @@ export class OfflineArchiveCache {
       return fs.accessSync(path);
     } catch (error) {
       return false;
+    }
+  }
+
+  private deleteFileIfExists(path: string): void {
+    try {
+      if (this.exists(path)) {
+        fs.unlinkSync(path);
+      }
+    } catch (error) {
+      // Best-effort cleanup of a file that could not be used.
     }
   }
 

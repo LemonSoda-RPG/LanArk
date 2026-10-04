@@ -1,4 +1,5 @@
 import { common } from '@kit.AbilityKit';
+import { util } from '@kit.ArkTS';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import {
   ArchiveIndexPayload,
@@ -6,6 +7,8 @@ import {
   CategoryItem,
   CategoryPayload
 } from '../../domain/model/LanraragiModels';
+import { localized } from '../../common/Localization';
+import { AppLog } from '../log/AppLog';
 
 const INDEX_FOLDER_NAME: string = 'lanark-library-index';
 
@@ -57,14 +60,17 @@ export class LibraryIndexCacheRepository {
       const json: string = fs.readTextSync(this.filePath);
       const payload: LibraryIndexPayload = JSON.parse(json) as LibraryIndexPayload;
       if (!Array.isArray(payload.archives) || !Array.isArray(payload.categories)) {
+        AppLog.warn('cache', 'index cache has an unexpected shape, ignoring it');
         return undefined;
       }
+      AppLog.info('cache', `index cache loaded: ${payload.archives.length} archives`);
       return new CachedLibraryIndex(
         ArchiveItem.listFromPayloads(payload.archives),
         CategoryItem.listFromPayloads(payload.categories),
         payload.savedAt
       );
     } catch (error) {
+      AppLog.warn('cache', `index cache unreadable: ${AppLog.describe(error)}`);
       return undefined;
     }
   }
@@ -88,7 +94,17 @@ export class LibraryIndexCacheRepository {
       );
       temporaryExists = true;
       try {
-        fs.writeSync(file.fd, JSON.stringify(payload));
+        // Bytes rather than a string so the expected length is exact, and a
+        // short write cannot be renamed into place: a truncated index would be
+        // dropped by `load` on every start, leaving the library to re-download
+        // the whole index until the next successful save.
+        const encoded: Uint8Array =
+          new util.TextEncoder().encodeInto(JSON.stringify(payload));
+        const written: number = fs.writeSync(file.fd, encoded.buffer as ArrayBuffer);
+        if (written !== encoded.byteLength) {
+          throw new Error(localized('书库索引写入不完整', 'The library index was written incompletely'));
+        }
+        fs.fsyncSync(file.fd);
       } finally {
         fs.closeSync(file);
       }
@@ -96,7 +112,9 @@ export class LibraryIndexCacheRepository {
       // a window where a crash leaves no index file at all.
       fs.renameSync(temporaryPath, this.filePath);
       temporaryExists = false;
+      AppLog.info('cache', `index cache saved: ${archives.length} archives`);
     } catch (error) {
+      AppLog.warn('cache', `index cache save failed: ${AppLog.describe(error)}`);
       // A stale cache must not prevent the library from loading from the server.
     } finally {
       if (temporaryExists && this.exists(temporaryPath)) {
@@ -114,6 +132,62 @@ export class LibraryIndexCacheRepository {
       return fs.accessSync(path);
     } catch (error) {
       return false;
+    }
+  }
+
+  /**
+   * Removes the cached index of one server, including any leftover temp files.
+   *
+   * Nothing used to remove these: the index of a server the user deleted stayed
+   * on disk with its whole library (titles, tags, ids) in plain JSON, and the
+   * temp files of an interrupted save were never reclaimed.
+   */
+  clearForServer(serverUrl: string): void {
+    this.deleteFileIfExists(this.filePath);
+    this.pruneTemporaryFiles(this.serverNamespace(serverUrl));
+  }
+
+  /** Removes every cached index and every leftover temp file. */
+  clearAll(): void {
+    let children: Array<string> = [];
+    try {
+      if (!this.exists(this.rootPath)) {
+        return;
+      }
+      children = fs.listFileSync(this.rootPath);
+    } catch (error) {
+      return;
+    }
+    for (const name of children) {
+      this.deleteFileIfExists(`${this.rootPath}/${name}`);
+    }
+  }
+
+  /** Deletes `<namespace>.json.<timestamp>.tmp` files left by a failed save. */
+  private pruneTemporaryFiles(namespace: string): void {
+    let children: Array<string> = [];
+    try {
+      if (!this.exists(this.rootPath)) {
+        return;
+      }
+      children = fs.listFileSync(this.rootPath);
+    } catch (error) {
+      return;
+    }
+    for (const name of children) {
+      if (name.startsWith(`${namespace}.json.`) && name.endsWith('.tmp')) {
+        this.deleteFileIfExists(`${this.rootPath}/${name}`);
+      }
+    }
+  }
+
+  private deleteFileIfExists(path: string): void {
+    try {
+      if (this.exists(path)) {
+        fs.unlinkSync(path);
+      }
+    } catch (error) {
+      // Best-effort: a cache file that cannot be removed is retried next time.
     }
   }
 

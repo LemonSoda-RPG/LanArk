@@ -5,6 +5,7 @@ import { asset } from '@kit.AssetStoreKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { ServerConfig, ServerProfile } from '../../domain/model/LanraragiModels';
 import { localized } from '../../common/Localization';
+import { AppLog } from '../log/AppLog';
 
 const PREFERENCES_NAME: string = 'lanark_settings';
 const SERVER_URL_KEY: string = 'lanraragi_server_url';
@@ -110,6 +111,7 @@ export class ServerConfigRepository {
         profiles.push(profile);
       }
       await this.persistProfiles(profiles, id);
+      AppLog.info('config', `server saved: ${config.serverUrl} (profiles=${profiles.length})`);
     } catch (error) {
       throw new Error(`${localized('保存服务器配置失败：', 'Failed to save server settings: ')}${this.errorMessage(error)}`);
     }
@@ -125,6 +127,7 @@ export class ServerConfigRepository {
         throw new Error(localized('找不到服务器配置', 'The server profile was not found'));
       }
       await this.persistProfiles(profiles, selected.id);
+      AppLog.info('config', `active server switched to ${selected.serverUrl}`);
     } catch (error) {
       throw new Error(`${localized('切换服务器失败：', 'Failed to switch server: ')}${this.errorMessage(error)}`);
     }
@@ -159,6 +162,7 @@ export class ServerConfigRepository {
         : activeId;
       await this.persistProfiles(profiles, nextActive);
       await this.removeApiKey(this.profileAlias(target.id));
+      AppLog.info('config', `server removed: ${target.serverUrl}`);
     } catch (error) {
       throw new Error(`${localized('删除服务器失败：', 'Failed to delete server: ')}${this.errorMessage(error)}`);
     }

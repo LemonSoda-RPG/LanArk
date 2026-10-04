@@ -6,6 +6,10 @@ import { localized } from '../../common/Localization';
 const COVER_CACHE_FOLDER_NAME: string = 'lanark-cover-cache-v2';
 const LEGACY_COVER_CACHE_FOLDER_NAME: string = 'lanark-image-cache';
 const READER_CACHE_FOLDER_NAME: string = 'lanark-reader-cache';
+// Separates an archive id from its reading session in a reader-cache folder
+// name, as in `<archiveId>-s<token>`. The suffix is what lets a cleanup tell a
+// folder written by a later session from the one it set out to delete.
+const SESSION_SUFFIX_MARKER: string = '-s';
 
 // Guards against allocating from a corrupt or absurd stat result.
 const MAX_CACHED_FILE_BYTES: number = 128 * 1024 * 1024;
@@ -40,6 +44,11 @@ export class ImageCacheStats {
 }
 
 export class ImageDiskCache {
+  /** AppStorage key holding the identifier of the current reading session. */
+  private static readonly SESSION_TOKEN_KEY: string = 'lanarkReaderCacheSession';
+  // Makes the per-session folder suffix unique when two sessions are started
+  // within the same millisecond.
+  private static sessionSequence: number = 0;
   private readonly filesDir: string;
   private readonly cacheDir: string;
   private readonly coverRootPath: string;
@@ -120,16 +129,155 @@ export class ImageDiskCache {
     );
   }
 
-  clearArchivePages(archiveId: string): void {
-    const archivePath: string =
-      `${this.readerServerPath}/${this.safePathPart(archiveId)}`;
-    if (!archivePath.startsWith(`${this.readerRootPath}/`)) {
-      throw new Error(localized('阅读缓存目录校验失败', 'Reading cache directory validation failed'));
+  /**
+   * Empties every cache this class owns, off the UI thread.
+   *
+   * The synchronous variant walks the whole tree with `listFileSync`,
+   * `statSync` and `unlinkSync`, one call per file: on a library of tens of
+   * thousands of covers that freezes the settings page for seconds. Stats and
+   * per-document cleanup were already moved off the frame; this is the last
+   * caller of the synchronous walk.
+   */
+  async clearAllAsync(): Promise<void> {
+    await this.removeRootAsync(this.coverRootPath);
+    await this.removeRootAsync(this.readerRootPath);
+    await this.removeRootAsync(this.legacyCoverRootPath);
+  }
+
+  private async removeRootAsync(rootPath: string): Promise<void> {
+    try {
+      if (!(await fs.access(rootPath))) {
+        return;
+      }
+      await this.removeDirectoryContentsAsync(rootPath, 0, new Map<string, number>());
+      await this.removeEmptyDirectoryAsync(rootPath);
+    } catch (error) {
+      // A cache that cannot be emptied only costs disk space until it is fixed.
     }
+  }
+
+  private async removeEmptyDirectoryAsync(path: string): Promise<void> {
+    try {
+      await fs.rmdir(path);
+    } catch (error) {
+      // A directory that still holds files stays; the next clear retries it.
+    }
+  }
+
+  clearArchivePages(archiveId: string): void {
+    const archivePath: string = this.readerArchivePath(archiveId);
     if (this.exists(archivePath)) {
       this.removeDirectoryContents(archivePath);
       this.removeDirectory(archivePath);
     }
+  }
+
+  /**
+   * Drops the reader cache of one archive off the UI thread.
+   *
+   * Deleting a document is one `stat` plus one `unlink` per cached page, which
+   * the synchronous variant runs on the UI thread: closing a long document used
+   * to spend that time in the frame that returns to the library. The reader
+   * cache only exists so a page is not downloaded twice while reading, so
+   * losing this cleanup on error is harmless.
+   *
+   * This runs while the user is already back in the library, so the same
+   * archive can be opened again before the walk finishes and start writing to
+   * the very directory being emptied. Only files that existed when the walk
+   * started are deleted, which leaves those fresh pages alone.
+   */
+  async clearArchivePagesAsync(archiveId: string): Promise<void> {
+    const archivePath: string = this.readerArchivePath(archiveId);
+    if (archivePath.length === 0) {
+      return;
+    }
+    try {
+      if (!(await fs.access(archivePath))) {
+        return;
+      }
+      // Only files that predate this walk go: the same archive opened again
+      // while the walk runs writes pages this must not touch.
+      await this.removeDirectoryContentsAsync(
+        archivePath,
+        Date.now(),
+        new Map<string, number>()
+      );
+      await this.removeEmptyDirectoryAsync(archivePath);
+    } catch (error) {
+      // The pages stay cached, which only costs disk space the system reclaims.
+    }
+  }
+
+  /**
+   * Empties the whole reader cache while nothing can be reading.
+   *
+   * The reader drops its own cache when a document is closed, so this only
+   * covers what that signal missed: a document left open by a process that was
+   * killed, and the caches kept by builds that did not clean up at all.
+   *
+   * Passed `0` as the cutoff this removes everything, which is what a start-up
+   * sweep wants — but the walk is not instantaneous, so a folder written by the
+   * session that starts meanwhile must survive it. `newSessionToken` gives that
+   * session a folder of its own, and `isStaleFile` also refuses anything written
+   * after the cutoff, so neither route can delete a page being read.
+   */
+  async clearReaderRootAsync(): Promise<void> {
+    try {
+      if (!(await fs.access(this.readerRootPath))) {
+        return;
+      }
+      await this.removeDirectoryContentsAsync(
+        this.readerRootPath,
+        0,
+        new Map<string, number>()
+      );
+      await this.removeEmptyDirectoryAsync(this.readerRootPath);
+    } catch (error) {
+      // Stale pages cost disk space only; the next start tries again.
+    }
+  }
+
+  /** Validated reader-cache directory of one archive, or '' if it is not one. */
+  private readerArchivePath(archiveId: string): string {
+    if (archiveId.length === 0) {
+      return '';
+    }
+    const archivePath: string =
+      `${this.readerServerPath}/${this.safePathPart(archiveId)}${this.readerSessionSuffix()}`;
+    // `readerRootPath` is derived from `cacheDir` and a constant folder name, so
+    // this can only fail if that construction changes. Deleting a directory is
+    // not something to get wrong quietly.
+    if (!archivePath.startsWith(`${this.readerRootPath}/`) ||
+      archivePath.length <= this.readerRootPath.length + 1) {
+      throw new Error(localized('阅读缓存目录校验失败', 'Reading cache directory validation failed'));
+    }
+    return archivePath;
+  }
+
+  /**
+   * Creates the identifier of one reading session.
+   *
+   * `Index` calls this when the library page starts, so the identifier changes
+   * once per cold start. A reader always writes into its own
+   * `server-<hash>/<archiveId>-s<identifier>/` folder, which is what keeps a
+   * cleanup that is still running from touching a document opened afterwards.
+   */
+  static newSessionToken(): string {
+    return `${Date.now()}-${ImageDiskCache.sessionSequence++}`;
+  }
+
+  /**
+   * Identifies this process' reading session.
+   *
+   * Falling back to a fixed value only costs cache reuse: the mtime guard in
+   * `removeDirectoryContentsAsync` still stops a cleanup from eating pages
+   * written afterwards.
+   */
+  private readerSessionSuffix(): string {
+    const token: string | undefined =
+      AppStorage.get<string>(ImageDiskCache.SESSION_TOKEN_KEY);
+    return token === undefined || token.length === 0 ?
+      '' : `${SESSION_SUFFIX_MARKER}${this.safePathPart(token)}`;
   }
 
   clearArchiveCover(archiveId: string): void {
@@ -147,7 +295,9 @@ export class ImageDiskCache {
   }
 
   private pagePath(archiveId: string, pageNumber: number): string {
-    return `${this.readerServerPath}/${this.safePathPart(archiveId)}/${pageNumber}.image`;
+    // Must stay in step with `readerArchivePath`: that is the directory this
+    // file lives in, and it is the directory a cleanup deletes.
+    return `${this.readerArchivePath(archiveId)}/${pageNumber}.image`;
   }
 
   private readFile(path: string): ArrayBuffer | undefined {
@@ -261,6 +411,101 @@ export class ImageDiskCache {
     } catch (error) {
       // Cache cleanup is best effort.
     }
+  }
+
+  /**
+   * Same as `removeDirectoryContents`, awaited instead of blocking the caller.
+   *
+   * `startedAtMs` is the wall-clock millisecond when the deletion started, and
+   * `0` means "delete everything". Files written during the walk belong to a
+   * reading session that began while it ran — the same archive reopened right
+   * after it was closed — so they are left alone by `isStaleFile`. `sessions`
+   * carries the session number each archive folder was created with, so a
+   * reopened archive is recognised even when the filesystem clock is too coarse
+   * to separate the two.
+   */
+  private async removeDirectoryContentsAsync(
+    path: string,
+    startedAtMs: number,
+    sessions: Map<string, number>
+  ): Promise<void> {
+    let children: Array<string> = [];
+    try {
+      children = await fs.listFile(path);
+    } catch (error) {
+      // An unreadable directory keeps whatever it still contains.
+      return;
+    }
+    for (const name of children) {
+      const childPath: string = `${path}/${name}`;
+      try {
+        const stat: fs.Stat = await fs.stat(childPath);
+        if (stat.isDirectory()) {
+          if (this.isNewerSessionFolder(name, sessions)) {
+            // An archive folder of a later session than this walk belongs to;
+            // its pages are in use right now.
+            continue;
+          }
+          await this.removeDirectoryContentsAsync(childPath, startedAtMs, sessions);
+          try {
+            await fs.rmdir(childPath);
+          } catch (error) {
+            // A directory that cannot be removed leaves its files cached.
+          }
+        } else if (startedAtMs === 0 || this.isStaleFile(stat, startedAtMs)) {
+          await fs.unlink(childPath);
+        }
+      } catch (error) {
+        // One unreadable entry must not stop the rest of the archive.
+      }
+    }
+  }
+
+  /**
+   * True when the file predates the deletion that is asking about it.
+   *
+   * `fs.Stat.mtime` is in seconds while `Date.now()` is in milliseconds, so the
+   * comparison has to be made in one unit; `mtimeNs` is used when the platform
+   * provides it, which also survives two writes inside the same second.
+   */
+  private isStaleFile(stat: fs.Stat, startedAtMs: number): boolean {
+    const modifiedNs: bigint | undefined = stat.mtimeNs;
+    if (modifiedNs !== undefined) {
+      return modifiedNs < BigInt(startedAtMs) * BigInt(1_000_000);
+    }
+    // Seconds to milliseconds: a file modified in the same second as the cutoff
+    // counts as stale, which deletes at most one extra page of a fresh session.
+    return stat.mtime * 1000 < startedAtMs;
+  }
+
+  /**
+   * Records the session number of archive folders as they are walked, and says
+   * whether one belongs to a session newer than this walk's.
+   *
+   * A folder is `<server>/<archiveId>-s<session>`; the same archive opened again
+   * during the walk gets a new number. Folders written by builds without a
+   * session suffix are recorded on first sight, so they are treated as the
+   * walk's own and cleaned normally.
+   */
+  private isNewerSessionFolder(name: string, sessions: Map<string, number>): boolean {
+    const marker: number = name.lastIndexOf(SESSION_SUFFIX_MARKER);
+    if (marker < 0) {
+      return false;
+    }
+    const suffix: string = name.substring(marker + SESSION_SUFFIX_MARKER.length);
+    if (suffix.length === 0) {
+      return false;
+    }
+    const sessionNumber: number = Number.parseInt(suffix.split('-')[0], 10);
+    if (Number.isNaN(sessionNumber)) {
+      return false;
+    }
+    const seen: number | undefined = sessions.get(name);
+    if (seen === undefined) {
+      sessions.set(name, sessionNumber);
+      return false;
+    }
+    return sessionNumber > seen;
   }
 
   private removeValidatedRoot(path: string, expectedPath: string, parentPath: string): void {

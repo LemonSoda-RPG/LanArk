@@ -8,6 +8,7 @@ const SORT_ASCENDING_KEY: string = 'library_sort_ascending';
 const HIDE_COMPLETED_KEY: string = 'library_hide_completed';
 const GRID_LAYOUT_KEY: string = 'library_grid_layout';
 const GRID_COLUMNS_KEY: string = 'library_grid_columns';
+const COVER_CROP_KEY: string = 'library_cover_crop';
 
 export class LibrarySettings {
   readonly sortModeIndex: number;
@@ -15,13 +16,22 @@ export class LibrarySettings {
   readonly hideCompleted: boolean;
   readonly gridLayout: boolean;
   readonly gridColumns: number;
+  /**
+   * Whether a cover fills its card and is cropped, or is shown whole inside it.
+   *
+   * Covers are not one shape, so the two are both reasonable: filling the card
+   * gives a tidy grid, keeping the whole image shows the entire artwork with
+   * empty space at the sides.
+   */
+  readonly coverCrop: boolean;
 
   constructor(
     sortModeIndex: number = 0,
     sortAscending: boolean = false,
     hideCompleted: boolean = false,
     gridLayout: boolean = true,
-    gridColumns: number = 0
+    gridColumns: number = 0,
+    coverCrop: boolean = true
   ) {
     // 0..11 are the metadata sorts, 12 is the local random shuffle.
     this.sortModeIndex = Math.min(Math.max(sortModeIndex, 0), 12);
@@ -30,6 +40,7 @@ export class LibrarySettings {
     this.gridLayout = gridLayout;
     const allowedValues: Array<number> = [0, 2, 3, 4, 5, 6];
     this.gridColumns = allowedValues.indexOf(gridColumns) >= 0 ? gridColumns : 0;
+    this.coverCrop = coverCrop;
   }
 }
 
@@ -54,12 +65,15 @@ export class LibrarySettingsRepository {
         (await store.get(GRID_LAYOUT_KEY, true)) as boolean;
       const gridColumns: number =
         (await store.get(GRID_COLUMNS_KEY, 0)) as number;
+      const coverCrop: boolean =
+        (await store.get(COVER_CROP_KEY, true)) as boolean;
       return new LibrarySettings(
         sortModeIndex,
         sortAscending,
         hideCompleted,
         gridLayout,
-        gridColumns
+        gridColumns,
+        coverCrop
       );
     } catch (error) {
       throw new Error(localized('读取书库设置失败', 'Could not read library settings'));
@@ -75,6 +89,7 @@ export class LibrarySettingsRepository {
       await store.put(HIDE_COMPLETED_KEY, settings.hideCompleted);
       await store.put(GRID_LAYOUT_KEY, settings.gridLayout);
       await store.put(GRID_COLUMNS_KEY, settings.gridColumns);
+      await store.put(COVER_CROP_KEY, settings.coverCrop);
       await store.flush();
     } catch (error) {
       throw new Error(localized('保存书库设置失败', 'Could not save library settings'));

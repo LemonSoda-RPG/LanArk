@@ -145,7 +145,7 @@ The URL must be reachable from the phone or tablet. `localhost` refers to the de
 
 ## Image memory policy
 
-Original encoded page bytes are cached locally and kept across reading sessions, so reopening an archive does not download it again; the system may reclaim the cache under storage pressure. Large pages are decoded to a bounded target size (maximum long edge 4096 px and an estimated 64 MiB RGBA budget) before rendering. This keeps high-resolution pages readable without allocating an unbounded PixelMap. The interpolation option changes display resampling only; it does not disable the fixed decode limits.
+Original encoded page bytes are cached locally for as long as the current archive is being read, and the cache of that archive is deleted when the reader is closed, so a long reading history does not keep growing. Cover caches are not affected. Cache left behind by a process the system killed is swept on the next start. Reopening an archive downloads its pages again. Large pages are decoded to a bounded target size (maximum long edge 4096 px and an estimated 64 MiB RGBA budget) before rendering. This keeps high-resolution pages readable without allocating an unbounded PixelMap. The interpolation option changes display resampling only; it does not disable the fixed decode limits.
 
 ## Data and privacy
 

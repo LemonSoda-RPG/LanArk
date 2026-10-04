@@ -282,6 +282,47 @@ const TRANSLATIONS: Record<string, string> = {
   , '检查更新失败': 'Could not check for updates'
   , '无法连接版本服务，请检查网络': 'Could not reach the release service. Check your network.'
   , '无法打开浏览器，请手动访问': 'Could not open a browser. Visit this address manually:'
+  , '当前': 'Active'
+  , '编辑中': 'Editing'
+  , '已保存': 'Saved'
+  , '正在下载…': 'Downloading…'
+  , '正在解码…': 'Decoding…'
+  , '已预载': 'Preloaded'
+  , '未预载后续页': 'No page preloaded ahead'
+  , '离线页面写入不完整': 'The offline page was written incompletely'
+  , '离线清单写入不完整': 'The offline manifest was written incompletely'
+  , '书库索引写入不完整': 'The library index was written incompletely'
+  , '图片超过大小上限': 'The image is larger than the supported limit'
+  , '服务器返回的不是图片': 'The server did not return an image'
+  , '服务器返回的是网页或接口数据，不是图片':
+    'The server returned a web page or API data instead of an image'
+  , '服务器仍在解压该档案，请稍后重试':
+    'The server is still extracting this archive. Try again shortly.'
+  , '裁剪封面': 'Crop covers'
+  , '开启时封面填满卡片并裁掉超出部分；关闭时完整显示整张封面，卡片内会留出空白':
+    'On: covers fill the card and the overflow is cropped. Off: the whole cover is shown inside the card, leaving empty space at the sides.'
+  , '编辑当前服务器': 'Edit this server'
+  , '显示 API Key': 'Show API key'
+  , '隐藏 API Key': 'Hide API key'
+  , '删除服务器': 'Delete server'
+  , '验证并保存服务器连接': 'Verify and save the server connection'
+  , '服务器配置仅保存在本机，API Key 存放在系统安全存储中。':
+    'Server settings stay on this device; the API key is kept in system secure storage.'
+  , '在下方填写地址和 API Key 后点击“验证并保存”。':
+    'Fill in the address and API key below, then tap “Verify and save”.'
+  // Network-stack error codes. These used to have no entry, so every connection
+  // failure stayed Chinese on an English device.
+  , '不支持的协议，请使用 http:// 或 https://': 'Unsupported protocol. Use http:// or https://'
+  , '无法解析服务器地址，请检查地址是否正确': 'The server address could not be resolved. Check the address.'
+  , '无法连接服务器，请检查地址、端口和网络': 'Could not reach the server. Check the address, port, and network.'
+  , '请求超时，请检查网络和服务器状态': 'The request timed out. Check the network and the server.'
+  , '连接已被远端关闭，请重试': 'The connection was closed by the server. Try again.'
+  , '服务器证书校验失败': 'The server certificate could not be verified'
+  , '系统禁止明文 HTTP 访问，请改用 HTTPS 或更换网络':
+    'The system blocks plain HTTP. Use HTTPS or another network.'
+  , '网络请求失败': 'Network request failed'
+  , '操作失败，请重试': 'The operation failed. Try again.'
+  , '清除': 'Clear'
 };
 
 export function localized(chinese: string, english?: string): string {
