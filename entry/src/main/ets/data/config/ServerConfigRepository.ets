@@ -123,6 +123,75 @@ export class ServerConfigRepository {
     }
   }
 
+  /**
+   * Updates the display name of a saved endpoint.
+   *
+   * Kept separate from `save` because a name is local: renaming must not require
+   * the endpoint to answer, and it must not change which profile is active. A
+   * blank name falls back to the address, the same as a new profile does.
+   */
+  async renameProfile(profileId: string, name: string): Promise<void> {
+    try {
+      const profiles: Array<ServerProfile> = await this.loadProfiles();
+      const index: number =
+        profiles.findIndex((profile: ServerProfile) => profile.id === profileId);
+      if (index < 0) {
+        throw new Error(localized('找不到服务器配置', 'The server profile was not found'));
+      }
+      const target: ServerProfile = profiles[index];
+      profiles[index] = new ServerProfile(target.id, target.serverUrl, target.apiKey, name);
+      const active: ServerProfile | undefined = await this.loadActiveProfile();
+      await this.persistProfiles(profiles, active === undefined ? target.id : active.id);
+      AppLog.info('config', `server renamed (profiles=${profiles.length})`);
+    } catch (error) {
+      throw new Error(`${localized('保存服务器名称失败：', 'Failed to save the server name: ')}${this.errorMessage(error)}`);
+    }
+  }
+
+  /**
+   * Writes a profile without contacting its endpoint.
+   *
+   * Needed when the endpoint cannot answer at all: a server that moved to a new
+   * address, or one whose stored key has gone stale, is otherwise impossible to
+   * correct, because the connection test runs first and refuses to save. The
+   * profile being edited is replaced in place; the first profile on a device
+   * becomes active, but this never switches away from an endpoint already in use.
+   */
+  async saveUnverified(profileId: string, config: ServerConfig, name: string): Promise<void> {
+    try {
+      const profiles: Array<ServerProfile> = await this.loadProfiles();
+      const id: string = this.profileIdForUrl(config.serverUrl);
+      const updated: ServerProfile = new ServerProfile(id, config.serverUrl, config.apiKey, name);
+      const next: Array<ServerProfile> = [];
+      let replaced: boolean = false;
+      for (const profile of profiles) {
+        if (profileId.length > 0 && profile.id === profileId) {
+          next.push(updated);
+          replaced = true;
+          continue;
+        }
+        if (profile.serverUrl === config.serverUrl) {
+          // The edited profile has taken this address over.
+          continue;
+        }
+        next.push(profile);
+      }
+      if (!replaced) {
+        next.push(updated);
+      }
+
+      const active: ServerProfile | undefined = await this.loadActiveProfile();
+      let activeId: string = updated.id;
+      if (active !== undefined) {
+        activeId = active.id === profileId ? updated.id : active.id;
+      }
+      await this.persistProfiles(next, activeId);
+      AppLog.info('config', `server saved without verification (profiles=${next.length})`);
+    } catch (error) {
+      throw new Error(`${localized('保存服务器配置失败：', 'Failed to save server settings: ')}${this.errorMessage(error)}`);
+    }
+  }
+
   /** Changes the active profile without changing its credentials. */
   async selectProfile(profileId: string): Promise<void> {
     try {

@@ -147,7 +147,12 @@ export class LanraragiApiClient {
       });
 
       if (response.responseCode !== 200) {
-        throw new Error(`${localized('服务器返回 HTTP')} ${response.responseCode}`);
+        // 401 and 403 are the ones people run into, and they point at the saved
+        // key rather than at the network: the server answered and refused.
+        const status: string = `${response.responseCode}`;
+        const refused: boolean = status === '401' || status === '403';
+        throw new Error(`${localized('服务器返回 HTTP')} ${status}` +
+          (refused ? localized('（API Key 不正确或无权限）', ' (wrong API key or no permission)') : ''));
       }
       if (typeof response.result !== 'string') {
         throw new Error(localized('服务器返回了无法识别的数据'));

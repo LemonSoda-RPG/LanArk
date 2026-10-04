@@ -329,7 +329,7 @@ export struct SettingsPage {
             .fontWeight(FontWeight.Bold)
             .fontColor($r('app.color.text_primary'))
             .width('100%')
-          Text(localized('修改后需要验证才能保存'))
+          Text(localized('点一行切换为当前使用；点“编辑”修改'))
             .copyOption(CopyOptions.LocalDevice)
             .fontSize(12)
             .fontColor($r('app.color.text_tertiary'))
@@ -424,9 +424,10 @@ export struct SettingsPage {
 
           TextInput({
             placeholder: localized('输入 LANraragi API Key'),
-            text: this.apiKeyDisplayText()
+            text: this.apiKey
           })
-            .type(InputType.Normal)
+            .type(this.isApiKeyVisible ? InputType.Normal : InputType.Password)
+            .showPasswordIcon(false)
             .height(46)
             .padding(0)
             .layoutWeight(1)
@@ -435,11 +436,11 @@ export struct SettingsPage {
             .placeholderColor($r('app.color.text_tertiary'))
             .backgroundColor(Color.Transparent)
             .onChange((value: string) => {
-              // A masked field only ever echoes the mask, so its value is
-              // ignored: the real key is typed in or pasted in the clear.
-              if (this.isApiKeyVisible) {
-                this.apiKey = value;
-              }
+              // The field holds the key itself and the input type does the
+              // masking. Masking the text by hand discarded typing unless the key
+              // had been revealed first, so a save could test a key the user had
+              // not typed.
+              this.apiKey = value;
               this.serverMessage = '';
             })
 
@@ -466,8 +467,15 @@ export struct SettingsPage {
         .backgroundColor($r('app.color.surface_muted'))
         .borderRadius(13)
 
+        Text(localized('改名会直接保存；改地址或密钥会先保存，再验证连接'))
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(12)
+          .lineHeight(18)
+          .fontColor($r('app.color.text_tertiary'))
+          .width('100%')
+
         Row({ space: 10 }) {
-          Button(this.isServerBusy ? localized('正在验证…') : localized('验证并保存'))
+          Button(this.isServerBusy ? localized('处理中…') : this.serverSaveLabel())
             .height(46)
             .layoutWeight(1)
             .fontSize(15)
@@ -713,10 +721,10 @@ export struct SettingsPage {
       color: $r('app.color.accent')
     })
     .borderRadius(14)
-    .accessibilityText(profile.name)
-    .accessibilityChecked(this.isSelectedServerProfile(index))
+    .accessibilityText(`${localized('使用此服务器')}: ${profile.name}`)
+    .accessibilityChecked(profile.id === this.activeProfileId)
     .onClick(() => {
-      this.editServerProfile(index);
+      this.useServerProfile(index);
     })
   }
 
@@ -1329,17 +1337,41 @@ export struct SettingsPage {
   }
 
   /**
-   * What the API key field shows.
+   * Makes a saved endpoint the one in use, which is what tapping its row means.
    *
-   * The field is a plain input rather than `InputType.Password`: that type draws
-   * its own reveal icon, which would sit next to the button below. The key is
-   * never echoed back, only a mask of the same length.
+   * The connection is checked first: an endpoint that cannot answer must not
+   * replace one that is working, and the row marked as in use should mean it
+   * really is. Editing is a separate action, reached from the button in the row.
    */
-  private apiKeyDisplayText(): string {
-    if (this.isApiKeyVisible) {
-      return this.apiKey;
+  private async useServerProfile(index: number): Promise<void> {
+    if (this.isServerBusy || index < 0 || index >= this.serverProfiles.length) {
+      return;
     }
-    return this.apiKey.length === 0 ? '' : '*'.repeat(this.apiKey.length);
+    const profile: ServerProfile = this.serverProfiles[index];
+    if (profile.id === this.activeProfileId) {
+      this.serverMessageIsError = false;
+      this.serverMessage = localized('这台服务器正在使用中');
+      return;
+    }
+
+    this.isServerBusy = true;
+    this.serverMessage = '';
+    try {
+      const client: LanraragiApiClient =
+        new LanraragiApiClient(profile.serverUrl, profile.apiKey);
+      await client.fetchServerInfo();
+      await this.serverRepository().selectProfile(profile.id);
+      this.activeProfileId = profile.id;
+      AppLog.info('config', `active server switched by tapping its row`);
+      this.serverMessageIsError = false;
+      this.serverMessage = `${localized('已切换到')}${profile.name}`;
+      this.onServerSaved(profile.toConfig());
+    } catch (error) {
+      this.serverMessageIsError = true;
+      this.serverMessage = `${localized('无法使用这台服务器：')}${this.describeError(error)}`;
+    } finally {
+      this.isServerBusy = false;
+    }
   }
 
   /**
@@ -1581,6 +1613,59 @@ export struct SettingsPage {
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
   }
 
+  /** The primary button says what it will actually do. */
+  private serverSaveLabel(): string {
+    if (this.onlyServerNameChanged()) {
+      return localized('保存名称', 'Save name');
+    }
+    return localized('验证并保存');
+  }
+
+  /**
+   * True when the form differs from the saved profile only by its name.
+   *
+   * The address is compared after normalisation because that is the form the
+   * repository stores, and a trailing slash must not count as an edit.
+   */
+  private onlyServerNameChanged(): boolean {
+    if (this.selectedServerProfileIndex < 0 ||
+      this.selectedServerProfileIndex >= this.serverProfiles.length) {
+      return false;
+    }
+    const profile: ServerProfile = this.serverProfiles[this.selectedServerProfileIndex];
+    const normalized: string = LanraragiApiClient.normalizeServerUrl(this.serverUrl);
+    return normalized === profile.serverUrl && this.apiKey === profile.apiKey;
+  }
+
+  /**
+   * Saves a renamed profile without contacting it.
+   *
+   * The form closes and the list is re-read, so the new name is on screen
+   * straight away, and the profile that is in use is left alone.
+   */
+  private async saveServerName(): Promise<void> {
+    if (this.selectedServerProfileIndex < 0 ||
+      this.selectedServerProfileIndex >= this.serverProfiles.length) {
+      return;
+    }
+    const target: ServerProfile = this.serverProfiles[this.selectedServerProfileIndex];
+    this.isServerBusy = true;
+    this.serverMessage = '';
+    try {
+      await this.serverRepository().renameProfile(target.id, this.serverName);
+      await this.reloadServerProfiles();
+      this.serverMessageIsError = false;
+      this.serverMessage = localized('名称已保存');
+      this.isServerFormOpen = false;
+      this.selectedServerProfileIndex = -1;
+    } catch (error) {
+      this.serverMessageIsError = true;
+      this.serverMessage = this.describeError(error);
+    } finally {
+      this.isServerBusy = false;
+    }
+  }
+
   private async verifyAndSaveServer(): Promise<void> {
     if (this.isServerBusy) {
       return;
@@ -1591,6 +1676,17 @@ export struct SettingsPage {
       return;
     }
 
+    this.serverName = this.serverName.trim();
+    // A rename is a local change, so it is saved without asking the endpoint to
+    // answer. Renaming used to run the connection test first, which meant a
+    // server whose stored key no longer matched could not be renamed at all: the
+    // test failed and the name was never written.
+    if (this.onlyServerNameChanged()) {
+      await this.saveServerName();
+      return;
+    }
+
+    const editingId: string = this.editedProfileId();
     this.isServerBusy = true;
     this.serverMessage = '';
     try {
@@ -1599,20 +1695,67 @@ export struct SettingsPage {
       const config: ServerConfig = new ServerConfig(normalizedUrl, this.apiKey);
       const client: LanraragiApiClient =
         new LanraragiApiClient(config.serverUrl, config.apiKey);
-      await client.fetchServerInfo();
-      this.serverName = this.serverName.trim();
-      await this.serverRepository().save(config, this.serverName);
+
+      // Written before the connection is tested. Testing first meant a server
+      // that had moved, or whose key had gone stale, could not be corrected at
+      // all: the test failed and the edit was thrown away.
+      await this.serverRepository().saveUnverified(editingId, config, this.serverName);
+      await this.reloadServerProfiles();
       this.serverUrl = normalizedUrl;
-      this.serverMessageIsError = false;
-      this.serverMessage = localized('连接验证成功，配置已安全保存');
-      this.onServerSaved(config);
-      this.pathStack.pop();
+      this.isServerFormOpen = false;
+      this.selectedServerProfileIndex = -1;
+
+      const saved: ServerProfile | undefined = this.serverProfiles.find(
+        (profile: ServerProfile) => profile.serverUrl === normalizedUrl);
+
+      let verified: boolean = true;
+      try {
+        await client.fetchServerInfo();
+      } catch (verifyError) {
+        verified = false;
+        // The edit is kept, but a server that cannot be reached does not take
+        // over from the one already in use.
+        this.serverMessageIsError = true;
+        this.serverMessage =
+          `${localized('配置已保存，但连接验证失败：')}${this.describeError(verifyError)}\n` +
+          localized('当前使用的服务器未改变。');
+        if (saved !== undefined && saved.id === this.activeProfileId) {
+          this.onServerSaved(config);
+        }
+      }
+
+      if (verified) {
+        if (saved !== undefined) {
+          await this.serverRepository().selectProfile(saved.id);
+          this.activeProfileId = saved.id;
+        }
+        this.serverMessageIsError = false;
+        this.serverMessage = localized('连接验证成功，配置已安全保存');
+        this.onServerSaved(config);
+        this.pathStack.pop();
+      }
     } catch (error) {
       this.serverMessageIsError = true;
       this.serverMessage = this.describeError(error);
     } finally {
       this.isServerBusy = false;
     }
+  }
+
+  /** Re-reads the saved endpoints and which of them is in use. */
+  private async reloadServerProfiles(): Promise<void> {
+    this.serverProfiles = await this.serverRepository().loadProfiles();
+    const active: ServerProfile | undefined = await this.serverRepository().loadActiveProfile();
+    this.activeProfileId = active === undefined ? '' : active.id;
+  }
+
+  /** Id of the profile open in the form, or '' while a new one is being added. */
+  private editedProfileId(): string {
+    if (this.selectedServerProfileIndex < 0 ||
+      this.selectedServerProfileIndex >= this.serverProfiles.length) {
+      return '';
+    }
+    return this.serverProfiles[this.selectedServerProfileIndex].id;
   }
 
   private async saveReaderSettings(): Promise<void> {

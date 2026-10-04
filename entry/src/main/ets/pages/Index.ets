@@ -1956,6 +1956,14 @@ struct Index {
     this.apiKey = config.apiKey;
     this.errorMessage = '';
     this.restoreCachedLibrary(config.serverUrl);
+    // The library page's own aboutToAppear does not run again when the settings
+    // page is popped, so a switch to another endpoint has to be followed by a
+    // fetch here, or the new server's archives would never arrive and the user
+    // would be left looking at a cache from the server they just left.
+    this.loadLibrary(new LanraragiApiClient(config.serverUrl, config.apiKey), true)
+      .catch((error: Object) => {
+        this.libraryError = this.describeError(error);
+      });
   }
 
   private applyClearedServerConfig(): void {
