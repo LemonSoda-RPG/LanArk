@@ -68,11 +68,8 @@ export class LibrarySettingsRepository {
         (await store.get(GRID_LAYOUT_KEY, true)) as boolean;
       const gridColumns: number =
         (await store.get(GRID_COLUMNS_KEY, 0)) as number;
-      // Covers are shown according to their own shape, so the stored preference
-      // is no longer consulted: a value saved by an older version would turn
-      // cropping off for every cover and undo that. Kept as `true` so a cover
-      // that cannot be measured still fills its card.
-      const coverCrop: boolean = true;
+      const coverCrop: boolean =
+        (await store.get(COVER_CROP_KEY, true)) as boolean;
       return new LibrarySettings(
         sortModeIndex,
         sortAscending,
