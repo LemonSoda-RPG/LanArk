@@ -50,7 +50,6 @@ export struct SettingsPage {
   @State private hideCompleted: boolean = false;
   @State private gridLayout: boolean = true;
   @State private gridColumns: number = 0;
-  @State private coverCrop: boolean = true;
   // Diagnostic log switches; off until the user asks for them.
   @State private logEnabled: boolean = false;
   @State private logVerbose: boolean = true;
@@ -707,13 +706,13 @@ export struct SettingsPage {
 
       Row({ space: 12 }) {
         Column({ space: 3 }) {
-          Text(localized('裁剪封面'))
+          Text(localized('封面按形状显示'))
             .copyOption(CopyOptions.LocalDevice)
             .fontSize(15)
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_primary'))
             .width('100%')
-          Text(localized('开启时封面填满卡片并裁掉超出部分；关闭时完整显示整张封面，卡片内会留出空白'))
+          Text(localized('竖版封面填满卡片并裁掉超出部分；横版封面完整显示，避免裁掉大半画面'))
             .copyOption(CopyOptions.LocalDevice)
             .fontSize(12)
             .lineHeight(17)
@@ -721,16 +720,8 @@ export struct SettingsPage {
             .width('100%')
         }
         .layoutWeight(1)
-
-        Toggle({ type: ToggleType.Switch, isOn: this.coverCrop })
-          .selectedColor($r('app.color.accent'))
-          .onChange((value: boolean) => {
-            this.coverCrop = value;
-            this.saveLibrarySettings();
-          })
       }
       .width('100%')
-      .height(76)
       .padding({ top: 8, bottom: 8 })
 
       Divider().color($r('app.color.divider'))
@@ -1275,7 +1266,6 @@ export struct SettingsPage {
       this.hideCompleted = settings.hideCompleted;
       this.gridLayout = settings.gridLayout;
       this.gridColumns = settings.gridColumns;
-    this.coverCrop = settings.coverCrop;
     } catch (error) {
       // Library defaults remain available when preferences cannot be read.
     }
@@ -1622,7 +1612,9 @@ export struct SettingsPage {
         this.hideCompleted,
         this.gridLayout,
         this.gridColumns,
-        this.coverCrop
+        // Cropping is decided per cover by its shape now, so the stored
+        // preference is no longer a setting; `true` is the safe default.
+        true
       );
       await this.libraryRepository().save(updated);
       this.onLibrarySettingsSaved(updated);
