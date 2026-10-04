@@ -1498,8 +1498,23 @@ struct Index {
     const repository: LibraryProgressOverlayRepository = this.progressOverlayRepository();
     const overlay: Record<string, number> = await repository.load();
     const readTimes: Record<string, number> = await repository.loadReadTimes();
-    this.pendingProgress = overlay;
-    this.pendingReadTimes = readTimes;
+    // Merged rather than assigned: this runs while the reader may already be
+    // open, and a page turned during the load would be dropped by an assignment
+    // until the overlay was written again. The larger position wins either way.
+    Object.keys(overlay).forEach((archiveId: string) => {
+      const stored: number = overlay[archiveId];
+      const current: number | undefined = this.pendingProgress[archiveId];
+      if (current === undefined || stored > current) {
+        this.pendingProgress[archiveId] = stored;
+      }
+    });
+    Object.keys(readTimes).forEach((archiveId: string) => {
+      const stored: number = readTimes[archiveId];
+      const current: number | undefined = this.pendingReadTimes[archiveId];
+      if (current === undefined || stored > current) {
+        this.pendingReadTimes[archiveId] = stored;
+      }
+    });
     let applied: boolean = false;
     this.archiveById.forEach((archive: ArchiveItem, archiveId: string) => {
       const page: number | undefined = overlay[archiveId];
@@ -1787,6 +1802,12 @@ struct Index {
     this.pendingProgress[archiveId] = pageNumber;
     const visibleArchive: ArchiveItem | undefined =
       this.archiveDataSource.updateProgress(archiveId, pageNumber);
+    // Logged because "the card still says unread" has two very different causes:
+    // this local update not reaching the grid, or the server handing back its old
+    // cached row on the next refresh and overwriting it.
+    AppLog.detail('library',
+      `progress ${archiveId} -> ${pageNumber}, inIndex=${archive !== undefined}, ` +
+      `inGrid=${visibleArchive !== undefined}`);
     if (this.hideCompleted && visibleArchive !== undefined &&
       visibleArchive.readingState === 2) {
       this.applyArchiveFilter();
