@@ -201,6 +201,60 @@ export class LanraragiApiClient {
     }
   }
 
+  /**
+   * One page of the library listing, driven entirely by server-side parameters.
+   *
+   * The server pages by its own `archives_per_page` setting and ignores a larger
+   * `length`, so a batch arrives with whatever it decides to send; the caller
+   * asks again from the new offset until `total` is reached.
+   *
+   * Ordering, filtering and text search all happen on the server, which is what
+   * lets the client hold only the pages it has loaded: a local sort or search
+   * over a partial list would give answers that depend on how far the user has
+   * scrolled.
+   */
+  async fetchArchiveIndexPage(start: number, length: number, sortBy: string,
+    descending: boolean, filter: string, categoryId: string): Promise<ArchiveIndexPageResult> {
+    let path: string =
+      `/api/search?start=${start}&length=${length}&sortby=${encodeURIComponent(sortBy)}` +
+      `&order=${descending ? 'desc' : 'asc'}`;
+    if (filter.length > 0) {
+      path += `&filter=${encodeURIComponent(filter)}`;
+    }
+    if (categoryId.length > 0) {
+      path += `&category=${encodeURIComponent(categoryId)}`;
+    }
+    AppLog.detail('http', `GET ${path}`);
+    const responseText: string = await this.fetchJsonText(path, localized('档案索引'));
+    const payload: ArchiveSearchPayload = JSON.parse(responseText) as ArchiveSearchPayload;
+    const archives: Array<ArchiveItem> = ArchiveItem.listFromPayloads(payload.data);
+    AppLog.detail('http',
+      `index page: ${archives.length} at ${start}, total ${payload.recordsTotal}`);
+    return new ArchiveIndexPageResult(archives, payload.recordsTotal);
+  }
+
+  /**
+   * A random sample of the library.
+   *
+   * The server picks these out of the full result of the same search engine, so
+   * the sample covers everything the filter matches rather than a page of it.
+   * Each call returns a fresh draw.
+   */
+  async fetchRandomArchives(count: number, categoryId: string,
+    filter: string): Promise<Array<ArchiveItem>> {
+    let path: string = `/api/search/random?count=${count}`;
+    if (categoryId.length > 0) {
+      path += `&category=${encodeURIComponent(categoryId)}`;
+    }
+    if (filter.length > 0) {
+      path += `&filter=${encodeURIComponent(filter)}`;
+    }
+    AppLog.detail('http', `GET ${path}`);
+    const responseText: string = await this.fetchJsonText(path, localized('随机档案'));
+    const payload: ArchiveSearchPayload = JSON.parse(responseText) as ArchiveSearchPayload;
+    return ArchiveItem.listFromPayloads(payload.data);
+  }
+
   async fetchArchiveThumbnail(archiveId: string, page: number = 0): Promise<ArrayBuffer | undefined> {
     const path: string =
       `/api/archives/${archiveId}/thumbnail?no_fallback=true&page=${page}`;

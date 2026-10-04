@@ -12,11 +12,13 @@ import {
 import { ServerConfigRepository } from '../data/config/ServerConfigRepository';
 import { LanraragiApiClient } from '../data/network/LanraragiApiClient';
 import {
+  ArchiveIndexPageResult,
   ArchiveInfoRouteParams,
   ArchiveItem,
   CategoryItem,
   ReaderRouteParams,
-  ServerConfig
+  ServerConfig,
+  ServerInfo
 } from '../domain/model/LanraragiModels';
 import { ArchiveReaderPage } from '../features/reader/ArchiveReaderPage';
 import { ArchiveInfoPage } from '../features/archive/ArchiveInfoPage';
@@ -27,11 +29,28 @@ import { DownloadManagerPage } from '../features/download/DownloadManagerPage';
 import { HistoryPage } from '../features/history/HistoryPage';
 import { LibraryProgressOverlayRepository } from '../data/cache/LibraryProgressOverlayRepository';
 import { ArchiveCoverView } from '../features/library/ArchiveCoverView';
+import { RandomArchivesPage } from '../features/library/RandomArchivesPage';
 import { AppLog } from '../data/log/AppLog';
 import { describeUserFacingError, localized } from '../common/Localization';
 
-/** Index of the "Random" entry in `sortModeLabels()`. */
-const RANDOM_SORT_INDEX: number = 12;
+/**
+ * What to ask for when the server's page size is unknown.
+ *
+ * Larger than any sane `archives_per_page`, so the server clamps it to whatever
+ * it is actually configured for. Used only until `/api/info` has been read.
+ */
+const PAGE_SIZE_PROBE: number = 1000;
+
+/**
+ * How long the loading indicator stays once a fetch has finished.
+ *
+ * The end of the list is reached before the last row is on screen, so a page
+ * served from the server's cache can arrive before the user scrolls to where
+ * the indicator would be — it would appear and vanish between frames. Holding
+ * it for this long makes it visible on a fast page and simply part of the wait
+ * on a slow one.
+ */
+const INDICATOR_LEAST_VISIBLE_MS: number = 500;
 
 class ArchiveDataSource implements IDataSource {
   private items: Array<ArchiveItem> = [];
@@ -62,6 +81,27 @@ class ArchiveDataSource implements IDataSource {
     this.items = items;
     this.listeners.forEach((listener: DataChangeListener) => {
       listener.onDataReloaded();
+    });
+  }
+
+  /**
+   * Adds a page without rebuilding the list.
+   *
+   * Lazy loading appends one page at a time; reloading per page would discard
+   * and recreate every visible row, and the list would jump back to the top
+   * while the user is reading it.
+   */
+  append(more: Array<ArchiveItem>): void {
+    if (more.length === 0) {
+      return;
+    }
+    const first: number = this.items.length;
+    for (let index: number = 0; index < more.length; index += 1) {
+      this.items.push(more[index]);
+    }
+    this.listeners.forEach((listener: DataChangeListener) => {
+      // `onDataAdd` is the current name; `onDataAdded` was deprecated in API 8.
+      listener.onDataAdd(first);
     });
   }
 
@@ -163,10 +203,30 @@ struct Index {
   // the same overlay as `pendingProgress` so the history order survives a
   // restart before the next refresh reports the server's own `lastreadtime`.
   private pendingReadTimes: Record<string, number> = {};
-  // Random ranks are drawn lazily and kept for the session, so browsing a
-  // category or searching does not shuffle the library on every keystroke.
-  // Only the "Random" sort mode ever fills this map.
-  private shuffleRanks: Map<string, number> = new Map<string, number>();
+  // Lazy loading: the client holds only the pages fetched so far, and asks for
+  // the next one when the user reaches the end. Ordering, filtering and search
+  // are server-side, so a partial list is still a correct answer.
+  /**
+   * Identifies the current listing request.
+   *
+   * Bumped whenever the query changes so a page that arrives late can tell it
+   * belongs to a listing the user has already replaced, and is dropped instead
+   * of being appended to the new one.
+   */
+  private libraryRequestId: number = 0;
+  private loadedCount: number = 0;
+  // Shown in the header, so it has to be observable: the server reports this
+  // total with every page, and it is what the header describes.
+  @State private totalCount: number = 0;
+  private isLoadingMore: boolean = false;
+  // Kept apart from `isLoadingMore`: the fetch may be running while the
+  // indicator is deliberately still hidden.
+  @State private showLoadingIndicator: boolean = false;
+  private indicatorDelayTimer: number = -1;
+  // The server pages by its own `archives_per_page`, so the client asks for that
+  // many instead of trying to override it.
+  private serverPageSize: number = 0;
+  private pendingSortRefresh: number = -1;
   // O(1) progress lookup instead of scanning the library on every page turn.
   private archiveById: Map<string, ArchiveItem> = new Map<string, ArchiveItem>();
   private libraryLandscape: boolean = false;
@@ -293,6 +353,8 @@ struct Index {
       })
     } else if (name === 'DownloadedArchives') {
       DownloadedArchivesPage()
+    } else if (name === 'RandomArchives') {
+      RandomArchivesPage()
     } else if (name === 'DownloadManager') {
       DownloadManagerPage()
     } else if (name === 'DiagnosticLog') {
@@ -381,7 +443,10 @@ struct Index {
         .width('100%')
       } else {
         Row({ space: 8 }) {
-          Text(`${this.selectedCategoryId.length === 0 ? localized('全部') : this.selectedCategoryName} · ${this.visibleArchiveCount}`)
+          // The server reports how many archives the listing holds, so show that
+          // rather than how many pages have been fetched: the count describes
+          // the library, not the scroll position.
+          Text(`${this.selectedCategoryId.length === 0 ? localized('全部') : this.selectedCategoryName} · ${this.totalCount}`)
             .copyOption(CopyOptions.LocalDevice)
             .fontSize(15)
             .fontWeight(FontWeight.Medium)
@@ -462,6 +527,25 @@ struct Index {
               onStateChange: (event: PopupStateChangeParam) => {
                 this.isCategoryPopupVisible = event.isVisible;
               }
+            })
+
+          Button() {
+            Image($r('app.media.icon_random'))
+              .width(19)
+              .height(19)
+              .renderMode(ImageRenderMode.Template)
+              .fillColor($r('app.color.accent_text'))
+          }
+            .width(40)
+            .height(40)
+            .borderRadius(20)
+            .backgroundColor($r('app.color.accent_soft'))
+            .accessibilityText(localized('随机档案'))
+            .onClick(() => {
+              this.pathStack.pushPath({
+                name: 'RandomArchives',
+                param: new Object()
+              });
             })
 
           Button() {
@@ -595,6 +679,7 @@ struct Index {
           .layoutWeight(1)
       } else {
         if (this.gridLayout) {
+          Stack({ alignContent: Alignment.Bottom }) {
           Grid() {
             LazyForEach(this.archiveDataSource, (archive: ArchiveItem) => {
               GridItem() {
@@ -613,12 +698,23 @@ struct Index {
           .cachedCount(6)
           .edgeEffect(EdgeEffect.Spring)
           .scrollBar(BarState.Auto)
+          .onReachEnd(() => {
+            this.loadNextPage();
+          })
           .onAreaChange((oldValue: Area, newValue: Area) => {
             if (typeof newValue.width === 'number' && newValue.width > 0) {
               this.updateLibraryContentWidthVp(newValue.width);
             }
           })
+
+            if (this.showLoadingIndicator) {
+              this.loadingMoreIndicator()
+            }
+          }
+          .width('100%')
+          .layoutWeight(1)
         } else {
+          Stack({ alignContent: Alignment.Bottom }) {
           List({ space: 10 }) {
             LazyForEach(this.archiveDataSource, (archive: ArchiveItem) => {
               ListItem() {
@@ -634,6 +730,16 @@ struct Index {
           .cachedCount(8)
           .edgeEffect(EdgeEffect.Spring)
           .scrollBar(BarState.Auto)
+          .onReachEnd(() => {
+            this.loadNextPage();
+          })
+
+            if (this.showLoadingIndicator) {
+              this.loadingMoreIndicator()
+            }
+          }
+          .width('100%')
+          .layoutWeight(1)
         }
       }
     }
@@ -794,14 +900,14 @@ struct Index {
     .accessibilityChecked(this.sortModeIndex === index)
     .onClick(() => {
       this.sortModeIndex = index;
-      this.sortAscending = index === 1 || index >= 6;
-      if (index === RANDOM_SORT_INDEX) {
-        // Picking "Random" again is how the user asks for a new shuffle.
-        this.shuffleRanks = new Map<string, number>();
-      }
+      // Newest first for the date sort, A-Z for the rest; the user can flip it.
+      this.sortAscending = index !== 0;
       this.isSortPopupVisible = false;
-      this.applyArchiveFilter();
       this.saveLibrarySettings();
+      // The order is the server's, so changing it means fetching again from the
+      // first page rather than reordering what happens to be loaded. The search
+      // text is kept: reordering the results of a search should not drop it.
+      this.reloadLibrary(false);
     })
   }
 
@@ -976,7 +1082,7 @@ struct Index {
     }
   }
 
-  private async reloadLibrary(): Promise<void> {
+  private async reloadLibrary(resetView: boolean = true): Promise<void> {
     if (this.serverUrl.length === 0) {
       this.libraryError = localized('请先在设置中配置服务器');
       return;
@@ -984,7 +1090,7 @@ struct Index {
     try {
       const client: LanraragiApiClient =
         new LanraragiApiClient(this.serverUrl, this.apiKey);
-      await this.loadLibrary(client, false);
+      await this.loadLibrary(client, false, resetView);
     } catch (error) {
       this.libraryError = this.describeError(error);
     }
@@ -1029,8 +1135,23 @@ struct Index {
    * and ignores the requested length; on this server that would mean ~90 requests
    * to rebuild the library, which is slower in total than asking once.
    */
-  private async loadLibrary(client: LanraragiApiClient, silent: boolean = false): Promise<void> {
+  private async loadLibrary(client: LanraragiApiClient, silent: boolean = false,
+    resetView: boolean = true): Promise<void> {
     this.libraryNotice = '';
+    // A refresh starts the listing over, so the filter state goes back to
+    // "everything" here, once, rather than on every page that follows.
+    if (resetView) {
+      this.selectedCategoryId = '';
+      this.selectedCategoryName = '全部';
+      this.searchText = '';
+    }
+    // A new listing always starts from the first page. `totalCount` is left
+    // alone for a silent refresh so the header keeps describing the library
+    // while the new listing is on its way, instead of dropping to zero.
+    this.loadedCount = 0;
+    if (resetView) {
+      this.totalCount = 0;
+    }
     const hadContent: boolean = this.completeArchiveIndex.length > 0;
     if (!silent) {
       this.libraryError = '';
@@ -1042,15 +1163,28 @@ struct Index {
       }
     }
     let failure: string = '';
+    const requestId: number = ++this.libraryRequestId;
+    let firstPage: ArchiveIndexPageResult = new ArchiveIndexPageResult([], 0);
+    let loadedCategories: Array<CategoryItem> = this.categories;
+    const sortBy: string = this.serverSortKey();
+    const descending: boolean = !this.sortAscending;
+    const filter: string = this.searchText.trim();
+    const categoryId: string = this.selectedCategoryId;
     try {
-      const loadedArchives: Array<ArchiveItem> = await client.fetchArchiveIndex();
-      let loadedCategories: Array<CategoryItem> = this.categories;
+      await this.ensureServerPageSize(client);
+      firstPage = await client.fetchArchiveIndexPage(
+        0, this.pageSize(), sortBy, descending, filter, categoryId);
       try {
         loadedCategories = await client.fetchCategories();
       } catch (error) {
         // Keep the last local category list if only the category request fails.
       }
-      await this.installLibrary(loadedArchives, loadedCategories, silent);
+      if (requestId !== this.libraryRequestId) {
+        // Another listing was started while this one was in flight.
+        return;
+      }
+      await this.installLibrary(firstPage, loadedCategories, silent, sortBy, descending, filter,
+        categoryId);
     } catch (error) {
       failure = this.describeError(error);
       AppLog.error('library', `load failed: ${AppLog.describe(error)}`);
@@ -1074,6 +1208,138 @@ struct Index {
     }
   }
 
+  /** How many entries a page holds, as the server defines it. */
+  private pageSize(): number {
+    // The server caps every page at its own `archives_per_page` and ignores a
+    // larger request, so when that setting could not be read the client asks for
+    // more than any page and lets the server decide. A fixed fallback would
+    // request less than the server is willing to send — a library configured for
+    // 500 a page would then arrive 100 at a time.
+    return this.serverPageSize > 0 ? this.serverPageSize : PAGE_SIZE_PROBE;
+  }
+
+  /**
+   * Reads the server's page size once.
+   *
+   * Asking for a number the server will not honor just makes the client's idea
+   * of a page disagree with what arrives, so the size comes from the server.
+   * Failure is not fatal: the fallback keeps paging working.
+   */
+  private async ensureServerPageSize(client: LanraragiApiClient): Promise<void> {
+    if (this.serverPageSize > 0) {
+      return;
+    }
+    try {
+      const info: ServerInfo = await client.fetchServerInfo();
+      if (info.archivesPerPage > 0) {
+        this.serverPageSize = info.archivesPerPage;
+      }
+    } catch (error) {
+      AppLog.warn('library', `page size unknown: ${AppLog.describe(error)}`);
+    }
+  }
+
+  /** The `sortby` value the search endpoint expects for the selected sort. */
+  private serverSortKey(): string {
+    switch (this.sortModeIndex) {
+      case 1:
+        return 'title';
+      case 2:
+        return 'pages';
+      case 3:
+        return 'artist';
+      case 4:
+        return 'group';
+      case 5:
+        return 'event';
+      case 6:
+        return 'series';
+      case 7:
+        return 'character';
+      case 8:
+        return 'parody';
+      default:
+        // Also the default the server itself uses.
+        return 'date_added';
+    }
+  }
+
+  /**
+   * Fetches the next page and appends it.
+   *
+   * Called when the user reaches the end of the list. Ordering, filtering and
+   * searching are all server-side, so appending keeps the list in the order the
+   * server returned instead of one the client has to recompute.
+   */
+  private async loadNextPage(): Promise<void> {
+    if (this.isLoadingMore || this.loadedCount >= this.totalCount ||
+      this.serverUrl.length === 0) {
+      return;
+    }
+    const requestId: number = this.libraryRequestId;
+    this.isLoadingMore = true;
+    // Shown for the whole fetch and held briefly afterwards (see the constant),
+    // so it is visible even when the page comes back almost immediately.
+    this.cancelIndicatorDelay();
+    this.showLoadingIndicator = true;
+    try {
+      const client: LanraragiApiClient = new LanraragiApiClient(this.serverUrl, this.apiKey);
+      const page: ArchiveIndexPageResult = await client.fetchArchiveIndexPage(
+        this.loadedCount, this.pageSize(), this.serverSortKey(),
+        !this.sortAscending, this.searchText.trim(), this.selectedCategoryId);
+      if (requestId !== this.libraryRequestId) {
+        // The listing was replaced while this page was loading, so its rows
+        // belong to a query the user has already moved on from.
+        AppLog.detail('library', `dropped page for stale request ${requestId}`);
+        return;
+      }
+      this.appendPage(page);
+    } catch (error) {
+      AppLog.warn('library', `page at ${this.loadedCount} failed: ${AppLog.describe(error)}`);
+      this.libraryNotice = localized('加载更多档案失败');
+    } finally {
+      this.isLoadingMore = false;
+      this.indicatorDelayTimer = setTimeout(() => {
+        this.indicatorDelayTimer = -1;
+        this.showLoadingIndicator = false;
+      }, INDICATOR_LEAST_VISIBLE_MS);
+    }
+  }
+
+  /** Clears a pending indicator timer, if one is running. */
+  private cancelIndicatorDelay(): void {
+    if (this.indicatorDelayTimer >= 0) {
+      clearTimeout(this.indicatorDelayTimer);
+      this.indicatorDelayTimer = -1;
+    }
+  }
+
+  /**
+   * Adds a page to the list and to the local lookup.
+   *
+   * The lookup is what progress updates and the reader resolve archives through,
+   * so a page that only reached the data source would be unopenable.
+   */
+  private appendPage(page: ArchiveIndexPageResult): void {
+    if (page.archives.length === 0) {
+      this.totalCount = this.loadedCount;
+      return;
+    }
+    // Progress recorded while this page was in flight is newer than the server's
+    // copy, so it is applied before the rows become visible.
+    this.mergePendingProgress(page.archives);
+    for (let index: number = 0; index < page.archives.length; index += 1) {
+      const archive: ArchiveItem = page.archives[index];
+      this.completeArchiveIndex.push(archive);
+      this.archiveById.set(archive.id, archive);
+    }
+    this.loadedCount = this.completeArchiveIndex.length;
+    this.totalCount = page.total > 0 ? page.total : this.loadedCount;
+    this.archiveDataSource.append(page.archives);
+    this.visibleArchiveCount = this.archiveDataSource.totalCount();
+    AppLog.detail('library', `page appended: ${this.loadedCount}/${this.totalCount}`);
+  }
+
   /**
    * Publishes a freshly fetched library.
    *
@@ -1081,14 +1347,15 @@ struct Index {
    * happens to land while someone is browsing must not throw away what they
    * selected.
    */
-  private async installLibrary(archives: Array<ArchiveItem>,
-    categories: Array<CategoryItem>, silent: boolean): Promise<void> {
+  private async installLibrary(firstPage: ArchiveIndexPageResult,
+    categories: Array<CategoryItem>, silent: boolean, sortBy: string, descending: boolean,
+    filter: string, categoryId: string): Promise<void> {
+    const archives: Array<ArchiveItem> = firstPage.archives;
     this.completeArchiveIndex = archives;
     this.allArchives = archives;
     this.categories = categories;
-    this.selectedCategoryId = '';
-    this.selectedCategoryName = '全部';
-    this.searchText = '';
+    this.loadedCount = archives.length;
+    this.totalCount = firstPage.total;
     this.reindexArchiveLookup(archives);
     // Positions recorded while this refresh was in flight are newer than what
     // the server just reported, so they are folded into the new instances
@@ -1109,8 +1376,60 @@ struct Index {
     this.applyArchiveFilter();
     this.libraryError = '';
     AppLog.info('library',
-      `loaded ${archives.length} archives, ${categories.length} categories` +
+      `first page ${archives.length}/${this.totalCount}, sort=${sortBy} desc=${descending}` +
+      ` filter="${filter}" category="${categoryId}"` +
       `${silent ? ' (background refresh)' : ''}`);
+  }
+
+  /**
+   * The strip shown under the last row while another page is on its way.
+   *
+   * It only appears when there is more to fetch, so the end of the library
+   * reads as an end rather than as a stall. The spinner is always spinning, so
+   * a page that is slow to arrive still looks like progress.
+   */
+  @Builder
+  private loadingMoreIndicator() {
+    Row({ space: 8 }) {
+      LoadingProgress()
+        .width(16)
+        .height(16)
+        .color($r('app.color.text_tertiary'))
+      Text(localized('加载中…'))
+        .copyOption(CopyOptions.LocalDevice)
+        .fontSize(12)
+        .fontColor($r('app.color.text_tertiary'))
+    }
+    .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+    .backgroundColor($r('app.color.surface_muted'))
+    .borderRadius(14)
+    .margin({ bottom: 12 })
+    .transition(TransitionEffect.OPACITY.animation({ duration: 220, curve: Curve.EaseOut }))
+  }
+
+  /**
+   * Cancels anything still scheduled for this page.
+   *
+   * Two of the timers only redraw or debounce a query, so dropping them is
+   * enough. The progress one is a pending disk write: clearing it without
+   * flushing would lose the last page turn of the session, so it is written out
+   * here instead.
+   */
+  aboutToBeDeleted(): void {
+    if (this.indicatorDelayTimer >= 0) {
+      clearTimeout(this.indicatorDelayTimer);
+      this.indicatorDelayTimer = -1;
+    }
+    if (this.searchDebounceTimer >= 0) {
+      clearTimeout(this.searchDebounceTimer);
+      this.searchDebounceTimer = -1;
+    }
+    if (this.progressPersistTimer >= 0) {
+      clearTimeout(this.progressPersistTimer);
+      this.progressPersistTimer = -1;
+      this.progressOverlayRepository().save(this.pendingProgress, this.pendingReadTimes)
+        .catch(() => {});
+    }
   }
 
   private showToast(message: string): void {
@@ -1179,8 +1498,23 @@ struct Index {
     const repository: LibraryProgressOverlayRepository = this.progressOverlayRepository();
     const overlay: Record<string, number> = await repository.load();
     const readTimes: Record<string, number> = await repository.loadReadTimes();
-    this.pendingProgress = overlay;
-    this.pendingReadTimes = readTimes;
+    // Merged rather than assigned: this runs while the reader may already be
+    // open, and a page turned during the load would be dropped by an assignment
+    // until the overlay was written again. The larger position wins either way.
+    Object.keys(overlay).forEach((archiveId: string) => {
+      const stored: number = overlay[archiveId];
+      const current: number | undefined = this.pendingProgress[archiveId];
+      if (current === undefined || stored > current) {
+        this.pendingProgress[archiveId] = stored;
+      }
+    });
+    Object.keys(readTimes).forEach((archiveId: string) => {
+      const stored: number = readTimes[archiveId];
+      const current: number | undefined = this.pendingReadTimes[archiveId];
+      if (current === undefined || stored > current) {
+        this.pendingReadTimes[archiveId] = stored;
+      }
+    });
     let applied: boolean = false;
     this.archiveById.forEach((archive: ArchiveItem, archiveId: string) => {
       const page: number | undefined = overlay[archiveId];
@@ -1257,6 +1591,16 @@ struct Index {
       }
       this.selectedCategoryId = categoryId;
       this.selectedCategoryName = categoryName;
+      // This view comes from a category listing that was already fetched in full
+      // (`start=-1`), so there is nothing left to page in. Leaving the counters
+      // describing the previous full-library view made the end of the list look
+      // reachable, and the "next page" then appended rows that were already on
+      // screen — duplicate ids, and duplicate LazyForEach keys with them.
+      this.loadedCount = this.allArchives.length;
+      this.totalCount = this.allArchives.length;
+      // Served whole, so any page request still in flight for the previous view
+      // must not be appended here.
+      this.libraryRequestId += 1;
       this.applyArchiveFilter();
     } catch (error) {
       this.libraryError = this.describeError(error);
@@ -1266,10 +1610,11 @@ struct Index {
   }
 
   /**
-   * Re-runs the library filter after a short pause.
+   * Re-runs the search after a short pause in typing.
    *
-   * Filtering and sorting walk the entire index, so running it on every
-   * keystroke stalls typing once the library is large.
+   * The search itself is a server request, so it is debounced rather than fired
+   * per keystroke. It is also silent: the previous results stay on screen while
+   * it runs, so the grid does not blink on every character.
    */
   private scheduleArchiveFilter(): void {
     if (this.searchDebounceTimer >= 0) {
@@ -1277,26 +1622,45 @@ struct Index {
     }
     this.searchDebounceTimer = setTimeout(() => {
       this.searchDebounceTimer = -1;
-      this.applyArchiveFilter();
+      this.runServerSearch();
     }, 250);
   }
 
-  private applyArchiveFilter(): void {
-    const query: string = this.searchText.trim().toLowerCase();
-    let filtered: Array<ArchiveItem> = this.allArchives.slice();
-    if (query.length > 0) {
-      filtered = this.allArchives.filter((archive: ArchiveItem) => {
-        return archive.searchKey().includes(query);
-      });
+  /**
+   * Searches the whole library through the server.
+   *
+   * The client only holds the pages it has loaded, so a local search would
+   * quietly miss everything below the fold. The endpoint matches both tags and
+   * titles, which is what the search box has always promised.
+   */
+  private async runServerSearch(): Promise<void> {
+    if (this.serverUrl.length === 0) {
+      return;
     }
+    try {
+      const client: LanraragiApiClient = new LanraragiApiClient(this.serverUrl, this.apiKey);
+      this.libraryNotice = localized('正在搜索…');
+      // resetView stays off: it would clear the query that was just typed.
+      await this.loadLibrary(client, true, false);
+    } catch (error) {
+      AppLog.warn('library', `search failed: ${AppLog.describe(error)}`);
+    }
+  }
+
+  /**
+   * Applies the parts of the view the client still owns.
+   *
+   * Searching, ordering and category selection are all server-side now, so this
+   * only re-applies the local "hide read" filter and republishes the rows. The
+   * order of the list is the order the pages arrived in.
+   */
+  private applyArchiveFilter(): void {
+    let filtered: Array<ArchiveItem> = this.allArchives.slice();
     if (this.hideCompleted) {
       filtered = filtered.filter((archive: ArchiveItem) => {
         return archive.readingState !== 2;
       });
     }
-    filtered.sort((left: ArchiveItem, right: ArchiveItem) => {
-      return this.compareArchives(left, right);
-    });
     this.archiveDataSource.replace(filtered);
     this.visibleArchiveCount = filtered.length;
   }
@@ -1334,97 +1698,34 @@ struct Index {
     this.saveLibrarySettings();
   }
 
-  private compareArchives(left: ArchiveItem, right: ArchiveItem): number {
-    let result: number = 0;
-    switch (this.sortModeIndex) {
-      case 0:
-        result = left.dateAdded - right.dateAdded;
-        break;
-      case 1:
-        result = left.title.localeCompare(right.title);
-        break;
-      case 2:
-        result = left.pageCount - right.pageCount;
-        break;
-      case 3:
-        result = left.progressRatio - right.progressRatio;
-        break;
-      case 4:
-        result = left.readingState - right.readingState;
-        break;
-      case 5:
-        result = Number(left.displayAsNew) - Number(right.displayAsNew);
-        break;
-      case 6:
-        result = left.tagValue('artist').localeCompare(right.tagValue('artist'));
-        break;
-      case 7:
-        result = left.tagValue('group').localeCompare(right.tagValue('group'));
-        break;
-      case 8:
-        result = left.tagValue('event').localeCompare(right.tagValue('event'));
-        break;
-      case 9:
-        result = left.tagValue('series').localeCompare(right.tagValue('series'));
-        break;
-      case 10:
-        result = left.tagValue('character').localeCompare(right.tagValue('character'));
-        break;
-      case 11:
-        result = left.tagValue('parody').localeCompare(right.tagValue('parody'));
-        break;
-      case RANDOM_SORT_INDEX:
-        result = this.shuffleRank(left.id) - this.shuffleRank(right.id);
-        break;
-      default:
-        result = left.title.localeCompare(right.title);
-        break;
-    }
-    if (result === 0) {
-      result = left.title.localeCompare(right.title);
-    }
-    return this.sortAscending ? result : -result;
-  }
-
   private sortModeLabels(): Array<string> {
+    // One entry per `serverSortKey` case, in the same order: the index selected
+    // here is what that switch maps to a `sortby` value. Progress, read state,
+    // isnew and a local shuffle are not offered because none of them can be
+    // expressed as a server-side order, and the list is paged.
     return [
       localized('添加时间'),
       localized('标题'),
       localized('页数'),
-      localized('阅读进度'),
-      localized('阅读状态'),
-      localized('NEW 状态'),
       localized('艺术家'),
       localized('团体'),
       localized('活动'),
       localized('系列'),
       localized('角色'),
-      localized('原作'),
-      localized('随机')
+      localized('原作')
     ];
   }
 
-  /**
-   * Stable random rank for one archive.
-   *
-   * The server only sorts by title or last read time, so "Random" is a local
-   * shuffle. Ranks are drawn on first use and cached, which keeps the ordering
-   * stable while searching or switching category instead of reshuffling on
-   * every redraw.
-   */
-  private shuffleRank(archiveId: string): number {
-    let rank: number | undefined = this.shuffleRanks.get(archiveId);
-    if (rank === undefined) {
-      rank = Math.random();
-      this.shuffleRanks.set(archiveId, rank);
-    }
-    return rank;
-  }
-
+  /** The name of the sort currently applied, for the toolbar's label. */
   private sortModeLabel(): string {
     const labels: Array<string> = this.sortModeLabels();
-    return labels[this.sortModeIndex] ?? labels[0];
+    const index: number = this.sortModeIndex;
+    if (index < 0 || index >= labels.length) {
+      return labels[0];
+    }
+    return labels[index];
   }
+
 
   private async refreshLibraryWindowSize(): Promise<void> {
     try {
@@ -1501,6 +1802,12 @@ struct Index {
     this.pendingProgress[archiveId] = pageNumber;
     const visibleArchive: ArchiveItem | undefined =
       this.archiveDataSource.updateProgress(archiveId, pageNumber);
+    // Logged because "the card still says unread" has two very different causes:
+    // this local update not reaching the grid, or the server handing back its old
+    // cached row on the next refresh and overwriting it.
+    AppLog.detail('library',
+      `progress ${archiveId} -> ${pageNumber}, inIndex=${archive !== undefined}, ` +
+      `inGrid=${visibleArchive !== undefined}`);
     if (this.hideCompleted && visibleArchive !== undefined &&
       visibleArchive.readingState === 2) {
       this.applyArchiveFilter();
@@ -1627,6 +1934,10 @@ struct Index {
   private updateLibraryContentWidthVp(widthVp: number): void {
     if (widthVp > 0 && Math.abs(widthVp - this.libraryContentWidth) > 0.5) {
       this.libraryContentWidth = widthVp;
+      // Logged so the random screen's column count can be compared against it:
+      // both grids derive their columns from this same measurement.
+      AppLog.info('library',
+        `grid ${widthVp}vp, columns=${this.effectiveGridColumns()}`);
     }
   }
 

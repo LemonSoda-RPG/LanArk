@@ -33,8 +33,11 @@ export class LibrarySettings {
     gridColumns: number = 0,
     coverCrop: boolean = true
   ) {
-    // 0..11 are the metadata sorts, 12 is the local random shuffle.
-    this.sortModeIndex = Math.min(Math.max(sortModeIndex, 0), 12);
+    // 0..8 are the sorts the search endpoint can perform; the client no longer
+    // offers progress, read state, isnew or a local shuffle, because those
+    // cannot be expressed as a server-side order and the list is loaded a page
+    // at a time.
+    this.sortModeIndex = Math.min(Math.max(sortModeIndex, 0), 8);
     this.sortAscending = sortAscending;
     this.hideCompleted = hideCompleted;
     this.gridLayout = gridLayout;
@@ -65,8 +68,11 @@ export class LibrarySettingsRepository {
         (await store.get(GRID_LAYOUT_KEY, true)) as boolean;
       const gridColumns: number =
         (await store.get(GRID_COLUMNS_KEY, 0)) as number;
-      const coverCrop: boolean =
-        (await store.get(COVER_CROP_KEY, true)) as boolean;
+      // Covers are shown according to their own shape, so the stored preference
+      // is no longer consulted: a value saved by an older version would turn
+      // cropping off for every cover and undo that. Kept as `true` so a cover
+      // that cannot be measured still fills its card.
+      const coverCrop: boolean = true;
       return new LibrarySettings(
         sortModeIndex,
         sortAscending,

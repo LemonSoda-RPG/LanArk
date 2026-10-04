@@ -18,10 +18,18 @@ export struct ArchiveCoverView {
   apiKey: string = '';
   coverWidth: number | string = 68;
   coverHeight: number | string = 92;
-  // Fills the card and crops, or fits the whole cover inside it.
+  /**
+   * Whether a cover may be cropped, decided per image by its shape.
+   *
+   * Portrait covers fill the card and are trimmed: they are roughly the card's
+   * own proportions, so little is lost. Landscape ones are shown whole, since
+   * trimming a wide image to a tall card throws away most of the artwork.
+   */
   @Prop cropCover: boolean = true;
   @State private cover: image.PixelMap | undefined = undefined;
   @State private isLoading: boolean = false;
+  /** False once a decoded cover has been measured and found to be wide. */
+  @State private coverIsPortrait: boolean = true;
   // Set when the component is destroyed. A cover decode that is still awaiting
   // when that happens would otherwise assign `cover` after the only release ran.
   private destroyed: boolean = false;
@@ -48,9 +56,12 @@ export struct ArchiveCoverView {
         Image(this.cover as image.PixelMap)
           .width('100%')
           .height('100%')
-          // Cover fills the card and trims the overflow; Contain keeps the whole
-          // artwork visible and leaves the card's own background around it.
-          .objectFit(this.cropCover ? ImageFit.Cover : ImageFit.Contain)
+          // A portrait cover fills the card and trims the overflow, which is
+          // close to its own shape. A landscape one is kept whole: fitting it to
+          // a tall card would discard most of the artwork. `cropCover` is the
+          // user's switch for whether any of this happens at all.
+          .objectFit(this.cropCover && this.coverIsPortrait ?
+            ImageFit.Cover : ImageFit.Contain)
       } else {
         Text(this.fileExtension.toUpperCase())
           .copyOption(CopyOptions.LocalDevice)
@@ -71,6 +82,25 @@ export struct ArchiveCoverView {
     .backgroundColor($r('app.color.surface_muted'))
     .borderRadius(10)
     .clip(true)
+  }
+
+  /**
+   * Records whether the decoded cover is portrait or landscape.
+   *
+   * Defaults to portrait on failure, so a cover that cannot be measured keeps
+   * the filling behaviour rather than suddenly showing as a small centred image.
+   */
+  private async measureCover(decoded: image.PixelMap): Promise<void> {
+    try {
+      const info: image.ImageInfo = await decoded.getImageInfo();
+      const width: number = info.size.width;
+      const height: number = info.size.height;
+      if (width > 0 && height > 0) {
+        this.coverIsPortrait = height >= width;
+      }
+    } catch (error) {
+      // Leave the default in place.
+    }
   }
 
   private async loadCover(): Promise<void> {
@@ -129,6 +159,9 @@ export struct ArchiveCoverView {
           decoded.release().catch(() => {});
           return;
         }
+        // Measured on the decoded cover, so the cached path is measured too —
+        // it never reads the ImageInfo that the encoding path needed.
+        await this.measureCover(decoded);
         this.cover = decoded;
       } finally {
         await source.release();
