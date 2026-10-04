@@ -675,7 +675,8 @@ export class LanraragiApiClient {
   }
 
   private async fetchJsonText(path: string, label: string): Promise<string> {
-    AppLog.detail('http', `GET ${path} (${label})`);    const request: http.HttpRequest = http.createHttp();
+    AppLog.detail('http', `GET ${path} (${label})`);
+    const request: http.HttpRequest = http.createHttp();
     try {
       const response: http.HttpResponse = await request.request(this.baseUrl + path, {
         method: http.RequestMethod.GET,

@@ -570,6 +570,11 @@ struct ReaderImageView {
       const source: image.ImageSource = image.createImageSource(buffer);
       try {
         const imageInfo: image.ImageInfo = await source.getImageInfo();
+        // Checked after the await: the page may have been scrolled away while
+        // the header was being read.
+        if (this.destroyed) {
+          return;
+        }
         if (imageInfo.size.width > 0 && imageInfo.size.height > 0) {
           this.imageAspectRatio = imageInfo.size.width / imageInfo.size.height;
         }
@@ -602,12 +607,19 @@ struct ReaderImageView {
         await source.release();
       }
     } catch (error) {
-      this.errorMessage = this.describeError(error);
-      AppLog.error('reader',
-        `page ${this.page.pageNumber} "${this.page.path}" failed: ` +
-        `${AppLog.describe(error)}`);
-      this.reportLoadState(ReaderPageLoadState.Failed);
+      // The message and the load state are only meaningful while the tile is
+      // still on screen; a destroyed one must not be written to.
+      if (!this.destroyed) {
+        this.errorMessage = this.describeError(error);
+        AppLog.error('reader',
+          `page ${this.page.pageNumber} "${this.page.path}" failed: ` +
+          `${AppLog.describe(error)}`);
+        this.reportLoadState(ReaderPageLoadState.Failed);
+      }
     } finally {
+      // Runs even when the early return above skipped the rest: `isLoading` is
+      // this component's own flag, and leaving it set would block a retry if the
+      // same instance is ever reused.
       this.isLoading = false;
     }
   }
@@ -659,6 +671,15 @@ export struct ArchiveReaderPage {
   @State private pages: Array<ReaderPage> = [];
   @State private currentPageIndex: number = 0;
   @State private isLoading: boolean = false;
+  /**
+   * Set when the reader is destroyed, so work started for it can stop.
+   *
+   * Only `aboutToBeDeleted` sets this: `aboutToDisappear` also fires when archive
+   * information is pushed on top, and the reader is still there afterwards.
+   */
+  private disposed: boolean = false;
+  /** The pending extraction poll, so it can be cancelled on destroy. */
+  private extractionTimer: number = -1;
   @State private errorMessage: string = '';
   @State private serverUrl: string = '';
   @State private apiKey: string = '';
@@ -700,6 +721,13 @@ export struct ArchiveReaderPage {
   }
 
   aboutToBeDeleted(): void {
+    // Before anything else: work started for this reader checks this flag after
+    // every await, so setting it first keeps later writes off a dead component.
+    this.disposed = true;
+    if (this.extractionTimer >= 0) {
+      clearTimeout(this.extractionTimer);
+      this.extractionTimer = -1;
+    }
     this.restoreReaderWindow();
     // The reader cache exists so a page is not downloaded twice while reading
     // one document, so it is dropped as soon as that document is closed. It is
@@ -1262,11 +1290,26 @@ export struct ArchiveReaderPage {
    * run. Treating the empty answer as a failure sent the reader to an error page
    * for an archive that was merely being prepared.
    */
+  /**
+   * Polls until the server has finished preparing the archive.
+   *
+   * Stops as soon as the reader is gone: the server keeps extracting either way,
+   * but here the requests and the wait would outlive the screen that asked for
+   * them — up to the retry limit, roughly two minutes.
+   */
   private async loadPagesFromServer(client: LanraragiApiClient): Promise<Array<ReaderPage>> {
     let attempts: number = 0;
     while (true) {
+      if (this.disposed) {
+        return [];
+      }
       const result: ArchivePagesResult =
         await client.fetchArchivePagesResult(this.params.archive.id);
+      // Checked again after the request: the reader may have been closed while
+      // it was in flight.
+      if (this.disposed) {
+        return [];
+      }
       if (result.pages.length > 0 || !result.isPreparing) {
         return result.pages;
       }
@@ -1279,16 +1322,27 @@ export struct ArchiveReaderPage {
     }
   }
 
+  /**
+   * Waits between extraction polls.
+   *
+   * The timer is tracked so it can be cleared when the reader closes, rather
+   * than leaving a pending callback holding the wait open.
+   */
   private waitForExtraction(): Promise<void> {
     return new Promise<void>((resolve: () => void) => {
-      setTimeout(() => {
+      if (this.disposed) {
+        resolve();
+        return;
+      }
+      this.extractionTimer = setTimeout(() => {
+        this.extractionTimer = -1;
         resolve();
       }, READER_EXTRACT_RETRY_DELAY_MS);
     });
   }
 
   private async loadPages(): Promise<void> {
-    if (this.isLoading || this.params.archive.id.length === 0) {
+    if (this.isLoading || this.disposed || this.params.archive.id.length === 0) {
       return;
     }
     this.isLoading = true;
@@ -1297,6 +1351,10 @@ export struct ArchiveReaderPage {
       try {
         const settings: ReaderSettings =
           await this.readerSettingsRepository().load();
+        // The reader may have been closed while the settings were loading.
+        if (this.disposed) {
+          return;
+        }
         this.readDirectionIndex = settings.directionIndex;
         this.readerModeIndex = settings.modeIndex;
         this.doublePageOffset = settings.doublePageOffset;
@@ -1317,6 +1375,9 @@ export struct ArchiveReaderPage {
             new Error(localized('请先在设置中配置服务器'));
         }
       }
+      if (this.disposed) {
+        return;
+      }
       this.serverUrl = this.params.offlineServerUrl.length > 0 ?
         this.params.offlineServerUrl : config.serverUrl;
       this.apiKey = config.apiKey;
@@ -1333,8 +1394,13 @@ export struct ArchiveReaderPage {
           new LanraragiApiClient(config.serverUrl, config.apiKey);
         loadedPages = await this.loadPagesFromServer(client);
       }
+      if (this.disposed) {
+        // The polling loop returns an empty list when the reader is gone, so
+        // this is also what stops a closed reader from reporting an error.
+        return;
+      }
       if (loadedPages.length === 0) {
-         throw new Error(localized('服务器返回的页面列表为空'));
+        throw new Error(localized('服务器返回的页面列表为空'));
       }
       this.pages = loadedPages;
       this.pageDataSource.replace(loadedPages);
@@ -1342,6 +1408,9 @@ export struct ArchiveReaderPage {
       if (this.params.offline) {
         this.offlineProgress = await new OfflineProgressRepository(context)
           .load(this.params.archive.id);
+      }
+      if (this.disposed) {
+        return;
       }
       const initialIndex: number = this.initialPageIndex(loadedPages.length);
       this.currentPageIndex = this.readerModeIndex === 1 ?
@@ -1353,12 +1422,16 @@ export struct ArchiveReaderPage {
         `pages=${loadedPages.length} start=${this.currentPageIndex + 1} ` +
         `preload=${this.preloadPageCount} offline=${this.params.offline}`);
     } catch (error) {
-      this.errorMessage = this.describeError(error);
-      this.pages = [];
-      this.pageDataSource.replace([]);
-      this.spreadDataSource.replace([]);
+      if (!this.disposed) {
+        this.errorMessage = this.describeError(error);
+        this.pages = [];
+        this.pageDataSource.replace([]);
+        this.spreadDataSource.replace([]);
+      }
     } finally {
-      this.isLoading = false;
+      if (!this.disposed) {
+        this.isLoading = false;
+      }
     }
   }
 
