@@ -6,13 +6,13 @@ import {
 import { ServerConfigRepository } from '../../data/config/ServerConfigRepository';
 import { LanraragiApiClient } from '../../data/network/LanraragiApiClient';
 import {
-  ArchiveInfoRouteParams,
   ArchiveItem,
+  ReaderRouteParams,
   ServerConfig
 } from '../../domain/model/LanraragiModels';
 import { localized } from '../../common/Localization';
 import { AppLog } from '../../data/log/AppLog';
-import { ArchiveCoverView } from '../library/ArchiveCoverView';
+import { ArchiveGridCard } from './ArchiveGridCard';
 
 /**
  * A fresh random sample of the library, redrawn on demand.
@@ -34,11 +34,31 @@ export struct RandomArchivesPage {
   // How many to draw each time. Twenty fills a screen or two on a phone without
   // making the draw itself slow.
   private drawCount: number = 20;
-  // Three columns: a browsing screen, so covers stay big enough to recognise.
-  private readonly gridColumns: number = 3;
+  // 0 means "work it out from the width", the same way the library grid does;
+  // a value set in the library settings overrides it. A hard-coded count made
+  // this screen show fewer, larger covers than the library on the same device.
+  @State private gridColumns: number = 0;
+  @State private contentWidth: number = 0;
 
   aboutToAppear(): void {
+    // The column count comes from the grid's own measured width, which is what
+    // the library grid uses, so both screens land on the same count. That width
+    // arrives with the first layout; until then the two-column fallback applies,
+    // exactly as it does in the library.
     this.load();
+  }
+
+  /**
+   * Records the grid width, in vp.
+   *
+   * Area.width from onAreaChange is already in vp. Converting it again divided
+   * it by the screen density (2.375 here), which dropped the estimate to a
+   * single column and pinned the grid at the two-column fallback.
+   */
+  private updateContentWidthVp(widthVp: number): void {
+    if (widthVp > 0 && Math.abs(widthVp - this.contentWidth) > 0.5) {
+      this.contentWidth = widthVp;
+    }
   }
 
   private async load(): Promise<void> {
@@ -55,6 +75,7 @@ export struct RandomArchivesPage {
       this.apiKey = config.apiKey;
       const settings: LibrarySettings = await new LibrarySettingsRepository(context).load();
       this.coverCrop = settings.coverCrop;
+      this.gridColumns = settings.gridColumns;
 
       if (this.serverUrl.length === 0) {
         this.loadError = localized('请先在设置中配置服务器');
@@ -71,11 +92,16 @@ export struct RandomArchivesPage {
     }
   }
 
-  /** Opening the card shows the same archive page the library grid opens. */
+  /**
+   * Tapping a card starts reading it, as tapping a card in the library does.
+   *
+   * The archive information page is reached from inside the reader, so opening
+   * it directly here would put a step between the tap and the pages.
+   */
   private openArchive(archive: ArchiveItem): void {
     this.pathStack.pushPath({
-      name: 'ArchiveInfo',
-      param: new ArchiveInfoRouteParams(archive, false)
+      name: 'ArchiveReader',
+      param: new ReaderRouteParams(archive, false)
     });
   }
 
@@ -107,7 +133,6 @@ export struct RandomArchivesPage {
           })
         }
         .width('100%')
-        .padding({ left: 16, right: 16 })
 
         if (this.loadError.length > 0) {
           Text(this.loadError)
@@ -115,9 +140,7 @@ export struct RandomArchivesPage {
             .fontSize(14)
             .fontColor($r('app.color.error'))
             .width('100%')
-            .padding({ left: 16, right: 16 })
         }
-
         if (this.isLoading && this.archives.length === 0) {
           Column({ space: 12 }) {
             LoadingProgress()
@@ -135,52 +158,66 @@ export struct RandomArchivesPage {
           Grid() {
             ForEach(this.archives, (archive: ArchiveItem) => {
               GridItem() {
-                Column({ space: 6 }) {
-                  ArchiveCoverView({
-                    archiveId: archive.id,
-                    fileExtension: archive.fileExtension,
-                    serverUrl: this.serverUrl,
-                    apiKey: this.apiKey,
-                    coverWidth: '100%',
-                    coverHeight: 168,
-                    cropCover: this.coverCrop
-                  })
-
-                  Text(archive.title)
-                    .copyOption(CopyOptions.LocalDevice)
-                    .fontSize(12)
-                    .maxLines(2)
-                    .textOverflow({ overflow: TextOverflow.Ellipsis })
-                    .fontColor($r('app.color.text_primary'))
-                    .width('100%')
-                }
-                .width('100%')
-                .accessibilityText(archive.title)
-                .onClick(() => {
-                  this.openArchive(archive);
+                ArchiveGridCard({
+                  archive: archive,
+                  coverCrop: this.coverCrop,
+                  serverUrl: this.serverUrl,
+                  apiKey: this.apiKey
                 })
               }
+              .onClick(() => {
+                this.openArchive(archive);
+              })
             }, (archive: ArchiveItem) => `${archive.id}-${archive.title}`)
           }
           .columnsTemplate(this.gridTemplate())
-          .columnsGap(12)
-          .rowsGap(14)
+          .columnsGap(10)
+          .rowsGap(10)
           .width('100%')
           .layoutWeight(1)
-          .padding({ left: 16, right: 16, bottom: 24 })
+          .padding({ bottom: 24 })
           .scrollBar(BarState.Off)
+          .onAreaChange((oldValue: Area, newValue: Area) => {
+            // Already in vp, and the horizontal padding now sits on the container
+            // above, as it does in the library, so this is the width the columns
+            // are actually laid out in.
+            if (typeof newValue.width === 'number' && newValue.width > 0) {
+              this.updateContentWidthVp(newValue.width);
+              AppLog.info('random',
+                `grid ${newValue.width}vp, columns=${this.effectiveGridColumns()}`);
+            }
+          })
         }
       }
       .width('100%')
       .height('100%')
-      .padding({ top: 6 })
+      .padding({ left: 16, right: 16, top: 6 })
       .backgroundColor($r('app.color.page_background'))
     }
     .title(localized('随机档案'))
     .backgroundColor($r('app.color.page_background'))
   }
 
+  /**
+   * Columns to show, matching the library grid.
+   *
+   * A count set in the library settings wins; otherwise it is derived from the
+   * width with the same minimum card width and gap the library uses, so a card
+   * here is the same size as a card there.
+   */
+  private effectiveGridColumns(): number {
+    if (this.gridColumns > 0) {
+      return this.gridColumns;
+    }
+    const minimumCardWidth: number = 160;
+    const gap: number = 10;
+    const estimated: number = Math.floor((this.contentWidth + gap) /
+      (minimumCardWidth + gap));
+    return Math.min(Math.max(estimated, 2), 6);
+  }
+
   private gridTemplate(): string {
-    return `repeat(${this.gridColumns}, 1fr)`;
+    const columns: number = this.effectiveGridColumns();
+    return `${'1fr '.repeat(columns)}`.trim();
   }
 }

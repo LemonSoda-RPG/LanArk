@@ -1934,6 +1934,10 @@ struct Index {
   private updateLibraryContentWidthVp(widthVp: number): void {
     if (widthVp > 0 && Math.abs(widthVp - this.libraryContentWidth) > 0.5) {
       this.libraryContentWidth = widthVp;
+      // Logged so the random screen's column count can be compared against it:
+      // both grids derive their columns from this same measurement.
+      AppLog.info('library',
+        `grid ${widthVp}vp, columns=${this.effectiveGridColumns()}`);
     }
   }
 

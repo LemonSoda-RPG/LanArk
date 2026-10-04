@@ -98,13 +98,19 @@ export class ServerConfigRepository {
     return profiles[0];
   }
 
-  /** Upserts by URL and makes the saved endpoint the active profile. */
-  async save(config: ServerConfig): Promise<void> {
+  /**
+   * Upserts by URL, stores the display name the user gave it, and makes the
+   * saved endpoint the active profile.
+   *
+   * An empty name falls back to the address, which is also what profiles saved
+   * before names existed continue to show.
+   */
+  async save(config: ServerConfig, name: string = ''): Promise<void> {
     try {
       const profiles: Array<ServerProfile> = await this.loadProfiles();
       const id: string = this.profileIdForUrl(config.serverUrl);
       const existingIndex: number = profiles.findIndex((profile: ServerProfile) => profile.serverUrl === config.serverUrl);
-      const profile: ServerProfile = new ServerProfile(id, config.serverUrl, config.apiKey);
+      const profile: ServerProfile = new ServerProfile(id, config.serverUrl, config.apiKey, name);
       if (existingIndex >= 0) {
         profiles[existingIndex] = profile;
       } else {

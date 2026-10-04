@@ -39,9 +39,20 @@ export struct SettingsPage {
     (settings: LibrarySettings): void => {};
   @State private serverUrl: string = '';
   @State private apiKey: string = '';
+  /** Display name the user gave the endpoint that is being edited. */
+  @State private serverName: string = '';
   @State private isApiKeyVisible: boolean = false;
   @State private serverProfiles: Array<ServerProfile> = [];
   @State private selectedServerProfileIndex: number = -1;
+  /** Id of the profile the library is currently reading from. */
+  @State private activeProfileId: string = '';
+  /**
+   * Whether the name/address/key form is showing.
+   *
+   * The saved list shows names only, so the fields carrying the address and the
+   * key stay collapsed until a row is edited or a new server is started.
+   */
+  @State private isServerFormOpen: boolean = false;
   @State private directionIndex: number = 0;
   @State private readerModeIndex: number = 0;
   @State private doublePageOffset: number = 0;
@@ -334,14 +345,45 @@ export struct SettingsPage {
 
       this.savedServersBlock()
 
+      if (this.isServerFormOpen) {
       Column({ space: 10 }) {
         Text(this.selectedServerProfileIndex >= 0 ?
-          localized('编辑当前服务器') : localized('新增服务器'))
+          localized('编辑服务器') : localized('新增服务器'))
           .copyOption(CopyOptions.LocalDevice)
           .fontSize(14)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.text_primary'))
           .width('100%')
+
+        Row({ space: 8 }) {
+          Image($r('app.media.icon_server'))
+            .width(19)
+            .height(19)
+            .renderMode(ImageRenderMode.Template)
+            .fillColor($r('app.color.text_tertiary'))
+
+          TextInput({
+            placeholder: localized('名称，例如：家里的 NAS'),
+            text: this.serverName
+          })
+            .type(InputType.Normal)
+            .enterKeyType(EnterKeyType.Next)
+            .height(46)
+            .padding(0)
+            .layoutWeight(1)
+            .fontSize(15)
+            .fontColor($r('app.color.text_primary'))
+            .placeholderColor($r('app.color.text_tertiary'))
+            .backgroundColor(Color.Transparent)
+            .onChange((value: string) => {
+              this.serverName = value;
+              this.serverMessage = '';
+            })
+        }
+        .width('100%')
+        .padding({ left: 13, right: 13 })
+        .backgroundColor($r('app.color.surface_muted'))
+        .borderRadius(13)
 
         Row({ space: 8 }) {
           Image($r('app.media.icon_globe'))
@@ -423,33 +465,34 @@ export struct SettingsPage {
         .padding({ left: 13, right: 5 })
         .backgroundColor($r('app.color.surface_muted'))
         .borderRadius(13)
+
+        Row({ space: 10 }) {
+          Button(this.isServerBusy ? localized('正在验证…') : localized('验证并保存'))
+            .height(46)
+            .layoutWeight(1)
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
+            .backgroundColor($r('app.color.accent'))
+            .enabled(!this.isServerBusy)
+            .accessibilityText(localized('验证并保存服务器连接'))
+            .onClick(() => {
+              this.verifyAndSaveServer();
+            })
+
+          Button(localized('取消'))
+            .height(46)
+            .fontSize(14)
+            .fontColor($r('app.color.text_secondary'))
+            .backgroundColor($r('app.color.surface_muted'))
+            .enabled(!this.isServerBusy)
+            .onClick(() => {
+              this.closeServerForm();
+            })
+        }
+        .width('100%')
       }
       .width('100%')
-
-      Row({ space: 10 }) {
-        Button(this.isServerBusy ? localized('正在验证…') : localized('验证并保存'))
-          .height(46)
-          .layoutWeight(1)
-          .fontSize(15)
-          .fontWeight(FontWeight.Medium)
-          .backgroundColor($r('app.color.accent'))
-          .enabled(!this.isServerBusy)
-          .accessibilityText(localized('验证并保存服务器连接'))
-          .onClick(() => {
-            this.verifyAndSaveServer();
-          })
-
-        Button(localized('清除本机配置'))
-          .height(46)
-          .fontSize(14)
-          .fontColor($r('app.color.error'))
-          .backgroundColor($r('app.color.error_soft'))
-          .enabled(!this.isServerBusy)
-          .onClick(() => {
-            this.clearLocalServer();
-          })
       }
-      .width('100%')
 
       if (this.serverMessage.length > 0) {
         Row({ space: 8 }) {
@@ -525,8 +568,8 @@ export struct SettingsPage {
             .fontSize(13)
             .fontColor($r('app.color.text_tertiary'))
             .textAlign(TextAlign.Center)
-          Text(localized('在下方填写地址和 API Key 后点击“验证并保存”。',
-            'Fill in the address and API key below, then tap Verify and save.'))
+          Text(localized('点击下方“新增服务器”，填写名称、地址和 API Key。',
+            'Tap Add server below, then fill in a name, address and API key.'))
             .copyOption(CopyOptions.LocalDevice)
             .fontSize(12)
             .lineHeight(18)
@@ -599,9 +642,9 @@ export struct SettingsPage {
             .hitTestBehavior(HitTestMode.None)
 
           if (this.isSelectedServerProfile(index)) {
-            // Tapping a row only loads it into the form; the endpoint becomes
-            // active when it is verified and saved. The label says so, rather
-            // than claiming the row is already in use.
+            // Editing and in-use are separate states: a row can sit in the form
+            // without being the endpoint the library reads from, and the
+            // endpoint only changes once it is verified and saved.
             Text(localized('编辑中', 'Editing'))
               .copyOption(CopyOptions.LocalDevice)
               .fontSize(11)
@@ -611,21 +654,38 @@ export struct SettingsPage {
               .backgroundColor($r('app.color.accent'))
               .borderRadius(7)
               .hitTestBehavior(HitTestMode.None)
+          } else if (profile.id === this.activeProfileId) {
+            Text(localized('使用中', 'In use'))
+              .copyOption(CopyOptions.LocalDevice)
+              .fontSize(11)
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.success'))
+              .padding({ left: 7, right: 7, top: 2, bottom: 2 })
+              .backgroundColor($r('app.color.success_soft'))
+              .borderRadius(7)
+              .hitTestBehavior(HitTestMode.None)
           }
         }
         .width('100%')
 
-        Text(this.serverProfileSubtitle(profile))
-          .copyOption(CopyOptions.LocalDevice)
-          .fontSize(12)
-          .fontColor($r('app.color.text_tertiary'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .width('100%')
-          .hitTestBehavior(HitTestMode.None)
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
+
+      Button(localized('编辑'))
+        .type(ButtonType.Normal)
+        .height(36)
+        .padding({ left: 14, right: 14 })
+        .fontSize(13)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.accent_text'))
+        .backgroundColor($r('app.color.surface'))
+        .borderRadius(11)
+        .enabled(!this.isServerBusy)
+        .accessibilityText(`${localized('编辑服务器')}: ${profile.name}`)
+        .onClick(() => {
+          this.editServerProfile(index);
+        })
 
       Button() {
         Image($r('app.media.icon_trash'))
@@ -656,7 +716,7 @@ export struct SettingsPage {
     .accessibilityText(profile.name)
     .accessibilityChecked(this.isSelectedServerProfile(index))
     .onClick(() => {
-      this.selectServerProfile(index);
+      this.editServerProfile(index);
     })
   }
 
@@ -700,28 +760,6 @@ export struct SettingsPage {
       }
       .width('100%')
       .height(66)
-      .padding({ top: 8, bottom: 8 })
-
-      Divider().color($r('app.color.divider'))
-
-      Row({ space: 12 }) {
-        Column({ space: 3 }) {
-          Text(localized('封面按形状显示'))
-            .copyOption(CopyOptions.LocalDevice)
-            .fontSize(15)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_primary'))
-            .width('100%')
-          Text(localized('竖版封面填满卡片并裁掉超出部分；横版封面完整显示，避免裁掉大半画面'))
-            .copyOption(CopyOptions.LocalDevice)
-            .fontSize(12)
-            .lineHeight(17)
-            .fontColor($r('app.color.text_tertiary'))
-            .width('100%')
-        }
-        .layoutWeight(1)
-      }
-      .width('100%')
       .padding({ top: 8, bottom: 8 })
 
       Divider().color($r('app.color.divider'))
@@ -1240,15 +1278,21 @@ export struct SettingsPage {
       this.serverProfiles = await this.serverRepository().loadProfiles();
       const active: ServerProfile | undefined = await this.serverRepository().loadActiveProfile();
       if (active !== undefined) {
+        this.activeProfileId = active.id;
         this.selectedServerProfileIndex = this.serverProfiles.findIndex(
           (profile: ServerProfile) => profile.id === active.id);
+        this.serverName = active.name;
         this.serverUrl = active.serverUrl;
         this.apiKey = active.apiKey;
       } else {
+        this.activeProfileId = '';
         this.selectedServerProfileIndex = -1;
+        this.serverName = '';
         this.serverUrl = '';
         this.apiKey = '';
       }
+      // With nothing saved, the form is the only useful thing to show.
+      this.isServerFormOpen = this.serverProfiles.length === 0;
     } catch (error) {
       this.serverMessageIsError = true;
       this.serverMessage = this.describeError(error);
@@ -1271,9 +1315,16 @@ export struct SettingsPage {
     }
   }
 
-  /** True when the row at `index` is the endpoint currently being edited. */
+  /**
+   * True when the row at `index` is the endpoint open in the form.
+   *
+   * The form is collapsed most of the time, and then no row is being edited —
+   * the list would otherwise claim a server is being edited as soon as the page
+   * opened, just because its values had been loaded into the hidden fields.
+   */
   private isSelectedServerProfile(index: number): boolean {
-    return index >= 0 && index === this.selectedServerProfileIndex &&
+    return this.isServerFormOpen && index >= 0 &&
+      index === this.selectedServerProfileIndex &&
       index < this.serverProfiles.length;
   }
 
@@ -1291,31 +1342,40 @@ export struct SettingsPage {
     return this.apiKey.length === 0 ? '' : '*'.repeat(this.apiKey.length);
   }
 
-  /** Second line of a saved endpoint; omitted when it would repeat the title. */
-  private serverProfileSubtitle(profile: ServerProfile): string {
-    if (profile.serverUrl === profile.name || profile.serverUrl.length === 0) {
-      return localized('已保存', 'Saved');
-    }
-    return profile.serverUrl;
-  }
-
-  private selectServerProfile(index: number): void {
+  /**
+   * Loads a saved endpoint into the form.
+   *
+   * The row itself shows only the name, so this is where the address and the key
+   * become visible again.
+   */
+  private editServerProfile(index: number): void {
     if (index < 0 || index >= this.serverProfiles.length) {
       return;
     }
     const profile: ServerProfile = this.serverProfiles[index];
     this.selectedServerProfileIndex = index;
+    this.serverName = profile.name;
     this.serverUrl = profile.serverUrl;
     this.apiKey = profile.apiKey;
     this.serverMessageIsError = false;
-    this.serverMessage = localized('已选择服务器，请点击验证并保存');
+    this.serverMessage = '';
+    this.isServerFormOpen = true;
   }
 
   private startNewServer(): void {
     this.selectedServerProfileIndex = -1;
+    this.serverName = '';
     this.serverUrl = '';
     this.apiKey = '';
     this.serverMessageIsError = false;
+    this.serverMessage = '';
+    this.isServerFormOpen = true;
+  }
+
+  /** Collapses the form again without touching what is already saved. */
+  private closeServerForm(): void {
+    this.isServerFormOpen = false;
+    this.selectedServerProfileIndex = -1;
     this.serverMessage = '';
   }
 
@@ -1327,8 +1387,8 @@ export struct SettingsPage {
     try {
       const result: CacheDialogResult = await
         (this.getUIContext().getPromptAction().showDialog({
-          title: localized('删除当前服务器'),
-          message: `${target.name}\n${localized('确认删除当前服务器？')}`,
+          title: localized('删除服务器'),
+          message: `${target.name}\n${localized('确认删除这台服务器？', 'Delete this server?')}`,
           buttons: [
             { text: localized('取消'), color: $r('app.color.text_secondary') },
             { text: localized('删除'), color: $r('app.color.error') }
@@ -1347,15 +1407,20 @@ export struct SettingsPage {
       this.serverProfiles = await this.serverRepository().loadProfiles();
       const active: ServerProfile | undefined = await this.serverRepository().loadActiveProfile();
       if (active === undefined) {
+        this.activeProfileId = '';
         this.selectedServerProfileIndex = -1;
+        this.serverName = '';
         this.serverUrl = '';
         this.apiKey = '';
       } else {
+        this.activeProfileId = active.id;
         this.selectedServerProfileIndex = this.serverProfiles.findIndex(
           (item: ServerProfile) => item.id === active.id);
+        this.serverName = active.name;
         this.serverUrl = active.serverUrl;
         this.apiKey = active.apiKey;
       }
+      this.isServerFormOpen = false;
       // Removing a profile also changes which endpoint the library page is
       // talking to, and the repository has already switched or cleared it. The
       // host page only learns about a server through these two callbacks, so
@@ -1535,54 +1600,12 @@ export struct SettingsPage {
       const client: LanraragiApiClient =
         new LanraragiApiClient(config.serverUrl, config.apiKey);
       await client.fetchServerInfo();
-      await this.serverRepository().save(config);
+      this.serverName = this.serverName.trim();
+      await this.serverRepository().save(config, this.serverName);
       this.serverUrl = normalizedUrl;
       this.serverMessageIsError = false;
       this.serverMessage = localized('连接验证成功，配置已安全保存');
       this.onServerSaved(config);
-      this.pathStack.pop();
-    } catch (error) {
-      this.serverMessageIsError = true;
-      this.serverMessage = this.describeError(error);
-    } finally {
-      this.isServerBusy = false;
-    }
-  }
-
-  private async clearLocalServer(): Promise<void> {
-    if (this.isServerBusy) {
-      return;
-    }
-    // This is the most damaging action on the page: it removes every saved
-    // server and every API key, and the keys cannot be recovered from the
-    // device, so it confirms like the other destructive actions do.
-    try {
-      const result: CacheDialogResult = await
-        (this.getUIContext().getPromptAction().showDialog({
-          title: localized('清除本机配置？'),
-          message: localized('将删除本机保存的所有服务器地址和 API Key，服务器上的档案不会受影响。'),
-          buttons: [
-            { text: localized('取消'), color: $r('app.color.text_secondary') },
-            { text: localized('清除'), color: $r('app.color.error') }
-          ]
-        }) as Promise<CacheDialogResult>);
-      if (result.index !== 1) {
-        return;
-      }
-    } catch (error) {
-      return;
-    }
-    this.isServerBusy = true;
-    this.serverMessage = '';
-    try {
-      await this.serverRepository().clear();
-      this.serverProfiles = [];
-      this.selectedServerProfileIndex = -1;
-      this.serverUrl = '';
-      this.apiKey = '';
-      this.serverMessageIsError = false;
-      this.serverMessage = localized('本机连接配置已清除，服务器档案未作任何更改');
-      this.onServerCleared();
       this.pathStack.pop();
     } catch (error) {
       this.serverMessageIsError = true;
