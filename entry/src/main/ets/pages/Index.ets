@@ -33,25 +33,6 @@ import { RandomArchivesPage } from '../features/library/RandomArchivesPage';
 import { AppLog } from '../data/log/AppLog';
 import { describeUserFacingError, localized } from '../common/Localization';
 
-/**
- * What to ask for when the server's page size is unknown.
- *
- * Larger than any sane `archives_per_page`, so the server clamps it to whatever
- * it is actually configured for. Used only until `/api/info` has been read.
- */
-const PAGE_SIZE_PROBE: number = 1000;
-
-/**
- * How long the loading indicator stays once a fetch has finished.
- *
- * The end of the list is reached before the last row is on screen, so a page
- * served from the server's cache can arrive before the user scrolls to where
- * the indicator would be — it would appear and vanish between frames. Holding
- * it for this long makes it visible on a fast page and simply part of the wait
- * on a slow one.
- */
-const INDICATOR_LEAST_VISIBLE_MS: number = 500;
-
 class ArchiveDataSource implements IDataSource {
   private items: Array<ArchiveItem> = [];
   private listeners: Array<DataChangeListener> = [];
@@ -206,14 +187,8 @@ struct Index {
   // the next one when the user reaches the end. Ordering, filtering and search
   // are server-side, so a partial list is still a correct answer.
   private loadedCount: number = 0;
-  // Shown in the header, so it has to be observable: the server reports this
-  // total with every page, and it is what the header describes.
-  @State private totalCount: number = 0;
+  private totalCount: number = 0;
   private isLoadingMore: boolean = false;
-  // Kept apart from `isLoadingMore`: the fetch may be running while the
-  // indicator is deliberately still hidden.
-  @State private showLoadingIndicator: boolean = false;
-  private indicatorDelayTimer: number = -1;
   // The server pages by its own `archives_per_page`, so the client asks for that
   // many instead of trying to override it.
   private serverPageSize: number = 0;
@@ -434,10 +409,7 @@ struct Index {
         .width('100%')
       } else {
         Row({ space: 8 }) {
-          // The server reports how many archives the listing holds, so show that
-          // rather than how many pages have been fetched: the count describes
-          // the library, not the scroll position.
-          Text(`${this.selectedCategoryId.length === 0 ? localized('全部') : this.selectedCategoryName} · ${this.totalCount}`)
+          Text(`${this.selectedCategoryId.length === 0 ? localized('全部') : this.selectedCategoryName} · ${this.visibleArchiveCount}`)
             .copyOption(CopyOptions.LocalDevice)
             .fontSize(15)
             .fontWeight(FontWeight.Medium)
@@ -670,7 +642,6 @@ struct Index {
           .layoutWeight(1)
       } else {
         if (this.gridLayout) {
-          Stack({ alignContent: Alignment.Bottom }) {
           Grid() {
             LazyForEach(this.archiveDataSource, (archive: ArchiveItem) => {
               GridItem() {
@@ -697,15 +668,7 @@ struct Index {
               this.updateLibraryContentWidthVp(newValue.width);
             }
           })
-
-            if (this.showLoadingIndicator) {
-              this.loadingMoreIndicator()
-            }
-          }
-          .width('100%')
-          .layoutWeight(1)
         } else {
-          Stack({ alignContent: Alignment.Bottom }) {
           List({ space: 10 }) {
             LazyForEach(this.archiveDataSource, (archive: ArchiveItem) => {
               ListItem() {
@@ -724,13 +687,6 @@ struct Index {
           .onReachEnd(() => {
             this.loadNextPage();
           })
-
-            if (this.showLoadingIndicator) {
-              this.loadingMoreIndicator()
-            }
-          }
-          .width('100%')
-          .layoutWeight(1)
         }
       }
     }
@@ -1191,12 +1147,9 @@ struct Index {
 
   /** How many entries a page holds, as the server defines it. */
   private pageSize(): number {
-    // The server caps every page at its own `archives_per_page` and ignores a
-    // larger request, so when that setting could not be read the client asks for
-    // more than any page and lets the server decide. A fixed fallback would
-    // request less than the server is willing to send — a library configured for
-    // 500 a page would then arrive 100 at a time.
-    return this.serverPageSize > 0 ? this.serverPageSize : PAGE_SIZE_PROBE;
+    // The server caps a page at its own `archives_per_page` and ignores anything
+    // larger, so asking for more only wastes the parameter.
+    return this.serverPageSize > 0 ? this.serverPageSize : 100;
   }
 
   /**
@@ -1258,10 +1211,6 @@ struct Index {
       return;
     }
     this.isLoadingMore = true;
-    // Shown for the whole fetch and held briefly afterwards (see the constant),
-    // so it is visible even when the page comes back almost immediately.
-    this.cancelIndicatorDelay();
-    this.showLoadingIndicator = true;
     try {
       const client: LanraragiApiClient = new LanraragiApiClient(this.serverUrl, this.apiKey);
       const page: ArchiveIndexPageResult = await client.fetchArchiveIndexPage(
@@ -1273,18 +1222,6 @@ struct Index {
       this.libraryNotice = localized('加载更多档案失败');
     } finally {
       this.isLoadingMore = false;
-      this.indicatorDelayTimer = setTimeout(() => {
-        this.indicatorDelayTimer = -1;
-        this.showLoadingIndicator = false;
-      }, INDICATOR_LEAST_VISIBLE_MS);
-    }
-  }
-
-  /** Clears a pending indicator timer, if one is running. */
-  private cancelIndicatorDelay(): void {
-    if (this.indicatorDelayTimer >= 0) {
-      clearTimeout(this.indicatorDelayTimer);
-      this.indicatorDelayTimer = -1;
     }
   }
 
@@ -1353,32 +1290,6 @@ struct Index {
       `first page ${archives.length}/${this.totalCount}, sort=${sortBy} desc=${descending}` +
       ` filter="${filter}" category="${categoryId}"` +
       `${silent ? ' (background refresh)' : ''}`);
-  }
-
-  /**
-   * The strip shown under the last row while another page is on its way.
-   *
-   * It only appears when there is more to fetch, so the end of the library
-   * reads as an end rather than as a stall. The spinner is always spinning, so
-   * a page that is slow to arrive still looks like progress.
-   */
-  @Builder
-  private loadingMoreIndicator() {
-    Row({ space: 8 }) {
-      LoadingProgress()
-        .width(16)
-        .height(16)
-        .color($r('app.color.text_tertiary'))
-      Text(localized('加载中…'))
-        .copyOption(CopyOptions.LocalDevice)
-        .fontSize(12)
-        .fontColor($r('app.color.text_tertiary'))
-    }
-    .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-    .backgroundColor($r('app.color.surface_muted'))
-    .borderRadius(14)
-    .margin({ bottom: 12 })
-    .transition(TransitionEffect.OPACITY.animation({ duration: 220, curve: Curve.EaseOut }))
   }
 
   private showToast(message: string): void {
