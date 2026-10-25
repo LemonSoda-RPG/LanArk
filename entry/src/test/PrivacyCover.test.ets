@@ -14,22 +14,25 @@ export default function privacyCoverTest() {
       expect(cover).assertTrue();
     });
 
-    it('uncovers the app when it is the active window again', 0, () => {
+    // The ability being paused is the signal the published sample uses, so it
+    // covers too: whichever of the two arrives first has to be enough.
+    it('covers the app when the ability is paused', 0, () => {
       const cover: boolean | undefined =
-        privacyCoverForStageEvent(window.WindowStageEventType.ACTIVE);
-      expect(cover).assertFalse();
+        privacyCoverForStageEvent(window.WindowStageEventType.PAUSED);
+      expect(cover).assertTrue();
     });
 
-    // HIDDEN and PAUSED arrive after the snapshot was taken, so acting on them
-    // would be too late; SHOWN and RESUMED say nothing the other two do not.
+    it('uncovers the app when it is the active window again', 0, () => {
+      expect(privacyCoverForStageEvent(window.WindowStageEventType.ACTIVE)).assertFalse();
+      expect(privacyCoverForStageEvent(window.WindowStageEventType.RESUMED)).assertFalse();
+    });
+
+    // HIDDEN arrives after the snapshot was taken, and SHOWN says nothing the
+    // others do not, so neither may touch the cover.
     it('leaves the cover alone for events that say nothing about it', 0, () => {
       expect(privacyCoverForStageEvent(window.WindowStageEventType.HIDDEN) === undefined)
         .assertTrue();
-      expect(privacyCoverForStageEvent(window.WindowStageEventType.PAUSED) === undefined)
-        .assertTrue();
       expect(privacyCoverForStageEvent(window.WindowStageEventType.SHOWN) === undefined)
-        .assertTrue();
-      expect(privacyCoverForStageEvent(window.WindowStageEventType.RESUMED) === undefined)
         .assertTrue();
     });
   });

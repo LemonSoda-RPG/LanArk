@@ -313,10 +313,10 @@ struct Index {
     .navDestination(this.pageRouter)
     .width('100%')
     .height('100%')
-    .foregroundBlurStyle(this.privacyCover ? BlurStyle.Thick : BlurStyle.NONE, {
-      colorMode: ThemeColorMode.SYSTEM,
-      adaptiveColor: AdaptiveColor.DEFAULT
-    })
+    // A plain blur rather than a material: the window is covered within a few
+    // milliseconds of leaving the foreground, and this is the cheaper pass to
+    // get onto the screen before the task switcher takes its snapshot.
+    .blur(this.privacyCover ? 40 : 0)
     .onAreaChange((oldValue: Area, newValue: Area) => {
       if (typeof newValue.width === 'number' && newValue.width > 0 &&
         typeof newValue.height === 'number' && newValue.height > 0) {

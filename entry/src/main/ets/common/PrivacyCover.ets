@@ -12,19 +12,22 @@ export const PRIVACY_COVER_KEY: string = 'lanarkPrivacyCover';
  * Whether the application should be covered, for one window-stage event.
  *
  * `INACTIVE` is the first signal that the window is losing the foreground, and
- * it arrives before the system takes the snapshot the task switcher shows.
- * Waiting for `HIDDEN` or `PAUSED` is too late: that snapshot is already taken,
- * and the content it holds stays visible in the switcher afterwards.
+ * `PAUSED` follows it when the ability is actually paused; both mean the app is
+ * on its way out, and either may be the one that arrives before the system takes
+ * the snapshot the task switcher shows. `ACTIVE` and `RESUMED` mean the app is
+ * back in front.
  *
  * Returns `undefined` for the events that say nothing about the cover, so the
  * caller leaves it as it is.
  */
 export function privacyCoverForStageEvent(
   event: window.WindowStageEventType): boolean | undefined {
-  if (event === window.WindowStageEventType.INACTIVE) {
+  if (event === window.WindowStageEventType.INACTIVE ||
+    event === window.WindowStageEventType.PAUSED) {
     return true;
   }
-  if (event === window.WindowStageEventType.ACTIVE) {
+  if (event === window.WindowStageEventType.ACTIVE ||
+    event === window.WindowStageEventType.RESUMED) {
     return false;
   }
   return undefined;
