@@ -1,7 +1,6 @@
 import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
-import { BusinessError } from '@kit.BasicServicesKit';
 import { AppLog } from '../data/log/AppLog';
 import { PRIVACY_COVER_KEY, privacyCoverForStageEvent } from '../common/PrivacyCover';
 
@@ -94,7 +93,6 @@ export default class EntryAbility extends UIAbility {
     }
 
     this.watchPrivacyCover(windowStage);
-    this.tryWindowPrivacyMode(windowStage);
 
     windowStage.loadContent('pages/Index', (error) => {
       if (error.code) {
@@ -111,13 +109,11 @@ export default class EntryAbility extends UIAbility {
   /**
    * Covers the app whenever it stops being the foreground window.
    *
-   * What this can and cannot do is worth stating, because the window is short:
-   * the window goes INACTIVE about six milliseconds before the snapshot the task
-   * switcher shows is taken, and a frame is nearer sixteen, so the snapshot is
-   * very likely to hold the frame from before the cover was drawn. It is kept
-   * because it is free and correct where the snapshot comes later, but the only
-   * reliable protection is `setWindowPrivacyMode`, which needs a restricted
-   * permission — see `tryWindowPrivacyMode`.
+   * `PAUSED` is the signal that arrives in time for this. `INACTIVE` alone is not
+   * enough: measured on the device, the window goes INACTIVE six milliseconds
+   * before it is hidden, less than a frame at 60Hz, so a cover keyed on it alone
+   * is drawn too late and the task switcher keeps the clear frame. Both are
+   * handled, since which of them comes first is not guaranteed across devices.
    */
   private watchPrivacyCover(windowStage: window.WindowStage): void {
     try {
@@ -147,29 +143,5 @@ export default class EntryAbility extends UIAbility {
   onForeground(): void {
     hilog.info(DOMAIN, 'LanArk', 'onForeground');
     AppStorage.setOrCreate(PRIVACY_COVER_KEY, false);
-  }
-
-  /**
-   * Asks the window manager to keep this window's content out of screenshots and
-   * out of the snapshot the task switcher shows.
-   *
-   * Drawing the cover cannot win on its own: the window goes INACTIVE about six
-   * milliseconds before the snapshot is taken, which is less than a frame, so the
-   * snapshot holds the frame from before the cover. This flag is the platform's
-   * own mechanism and takes effect without a frame.
-   *
-   * `ohos.permission.PRIVACY_WINDOW` is a restricted permission, so a refusal is
-   * the expected outcome on a normal build; the drawn cover then remains the only
-   * protection, and it is best effort.
-   */
-  private async tryWindowPrivacyMode(windowStage: window.WindowStage): Promise<void> {
-    try {
-      const mainWindow: window.Window = windowStage.getMainWindowSync();
-      await mainWindow.setWindowPrivacyMode(true);
-      hilog.info(DOMAIN, 'LanArk', 'window privacy mode: on');
-    } catch (error) {
-      hilog.error(DOMAIN, 'LanArk', 'window privacy mode refused: code=%{public}s',
-        `${(error as BusinessError).code}`);
-    }
   }
 }
