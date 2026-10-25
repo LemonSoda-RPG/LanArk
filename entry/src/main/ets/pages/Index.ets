@@ -105,6 +105,15 @@ class ArchiveDataSource implements IDataSource {
     });
   }
 
+  /**
+   * Swaps in a new instance carrying the page position.
+   *
+   * Writing to the existing instance was not enough: the grid keeps whatever
+   * `getData` returned when it built the row, and that reference never saw the
+   * write — the card kept its old text and a tap on it handed the reader the old
+   * position. A new instance plus `onDataChange` is what rebuilds the row and
+   * carries the new position into the tap.
+   */
   updateProgress(archiveId: string, pageNumber: number): ArchiveItem | undefined {
     const index: number = this.items.findIndex((archive: ArchiveItem) => {
       return archive.id === archiveId;
@@ -112,8 +121,8 @@ class ArchiveDataSource implements IDataSource {
     if (index < 0) {
       return undefined;
     }
-    const updated: ArchiveItem = this.items[index];
-    updated.setProgress(pageNumber);
+    const updated: ArchiveItem = this.items[index].withProgress(pageNumber);
+    this.items[index] = updated;
     this.listeners.forEach((listener: DataChangeListener) => {
       listener.onDataChange(index);
     });
@@ -688,7 +697,7 @@ struct Index {
               .onClick(() => {
                 this.openArchiveReader(archive);
               })
-            }, (archive: ArchiveItem) => `grid-${archive.id}`)
+            }, (archive: ArchiveItem) => `grid-${archive.id}-${archive.progress}`)
           }
           .columnsTemplate(this.gridColumnsTemplate())
           .columnsGap(10)
@@ -723,7 +732,7 @@ struct Index {
               .onClick(() => {
                 this.openArchiveReader(archive);
               })
-            }, (archive: ArchiveItem) => archive.id)
+            }, (archive: ArchiveItem) => `${archive.id}-${archive.progress}`)
           }
           .width('100%')
           .layoutWeight(1)
@@ -1498,6 +1507,7 @@ struct Index {
     const repository: LibraryProgressOverlayRepository = this.progressOverlayRepository();
     const overlay: Record<string, number> = await repository.load();
     const readTimes: Record<string, number> = await repository.loadReadTimes();
+    AppLog.detail('overlay', `applying ${Object.keys(overlay).length} stored position(s)`);
     // Merged rather than assigned: this runs while the reader may already be
     // open, and a page turned during the load would be dropped by an assignment
     // until the overlay was written again. The larger position wins either way.
@@ -1518,7 +1528,9 @@ struct Index {
     let applied: boolean = false;
     this.archiveById.forEach((archive: ArchiveItem, archiveId: string) => {
       const page: number | undefined = overlay[archiveId];
-      if (page !== undefined && Number.isFinite(page) && page > 0) {
+      // Only ever moves forward: an overlay written before the index was
+      // refreshed must not undo a position the server already reports as newer.
+      if (page !== undefined && Number.isFinite(page) && page > archive.progress) {
         archive.setProgress(page);
         applied = true;
       }
@@ -1528,9 +1540,9 @@ struct Index {
         archive.markReadAt(readAt);
       }
     });
-    // The badges read their archive through @ObjectLink, so a full re-filter is
-    // only needed when the completed-filtered set can actually change.
-    if (applied && this.hideCompleted) {
+    // Rebuilt whenever a position was applied: this runs after the first layout
+    // as well, and the rows read their values when they were built.
+    if (applied) {
       this.applyArchiveFilter();
     }
   }
@@ -1780,39 +1792,55 @@ struct Index {
   }
 
   private openArchiveReader(archive: ArchiveItem): void {
+    // The row may still hold the instance it was built with, so the reader is
+    // given the current one: it is what decides the page to open at.
+    const current: ArchiveItem | undefined = this.archiveById.get(archive.id);
     this.pathStack.pushPath({
       name: 'ArchiveReader',
-      param: new ReaderRouteParams(archive, false)
+      param: new ReaderRouteParams(current === undefined ? archive : current, false)
     });
   }
 
   private updateArchiveProgress(archiveId: string, pageNumber: number): void {
-    // `allArchives` and `completeArchiveIndex` hold the same instances, so one
-    // map lookup updates every view that observes the archive.
-    const archive: ArchiveItem | undefined = this.archiveById.get(archiveId);
-    if (archive !== undefined) {
-      archive.setProgress(pageNumber);
-      archive.markReadAt(Math.floor(Date.now() / 1000));
-      this.pendingReadTimes[archiveId] = archive.lastReadTime;
+    const readAt: number = Math.floor(Date.now() / 1000);
+    // The grid returns the replacement instance, which then takes the place of
+    // the old one in every lookup. Updating the old object in place left the row
+    // showing the previous position and the next tap carrying it.
+    const updated: ArchiveItem | undefined =
+      this.archiveDataSource.updateProgress(archiveId, pageNumber);
+    if (updated !== undefined) {
+      updated.markReadAt(readAt);
+      this.swapArchiveInstance(archiveId, updated);
+      this.pendingReadTimes[archiveId] = updated.lastReadTime;
     } else {
-      // The archive is not in the library (deleted or a fresh index); keep the
-      // history entry for it rather than dropping the read time.
-      this.pendingReadTimes[archiveId] = Math.floor(Date.now() / 1000);
+      // Not in the library (deleted, or a fresh index): keep the history entry
+      // rather than dropping the read time.
+      this.pendingReadTimes[archiveId] = readAt;
     }
     this.pendingProgress[archiveId] = pageNumber;
-    const visibleArchive: ArchiveItem | undefined =
-      this.archiveDataSource.updateProgress(archiveId, pageNumber);
-    // Logged because "the card still says unread" has two very different causes:
-    // this local update not reaching the grid, or the server handing back its old
-    // cached row on the next refresh and overwriting it.
     AppLog.detail('library',
-      `progress ${archiveId} -> ${pageNumber}, inIndex=${archive !== undefined}, ` +
-      `inGrid=${visibleArchive !== undefined}`);
-    if (this.hideCompleted && visibleArchive !== undefined &&
-      visibleArchive.readingState === 2) {
+      `progress ${archiveId.substring(0, 8)} -> ${pageNumber}, inGrid=${updated !== undefined}`);
+    if (this.hideCompleted && updated !== undefined && updated.readingState === 2) {
       this.applyArchiveFilter();
     }
     this.scheduleProgressPersistence();
+  }
+
+  /** Points every lookup at the replacement instance. */
+  private swapArchiveInstance(archiveId: string, updated: ArchiveItem): void {
+    this.archiveById.set(archiveId, updated);
+    for (let index: number = 0; index < this.completeArchiveIndex.length; index += 1) {
+      if (this.completeArchiveIndex[index].id === archiveId) {
+        this.completeArchiveIndex[index] = updated;
+      }
+    }
+    if (this.allArchives !== this.completeArchiveIndex) {
+      for (let index: number = 0; index < this.allArchives.length; index += 1) {
+        if (this.allArchives[index].id === archiveId) {
+          this.allArchives[index] = updated;
+        }
+      }
+    }
   }
 
   private removeDeletedArchive(archiveId: string): void {
