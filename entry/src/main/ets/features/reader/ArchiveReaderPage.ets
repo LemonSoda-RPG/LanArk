@@ -554,7 +554,10 @@ struct ReaderImageView {
           // `priority` means "this is the page being read": it skips the queue.
           // Taken from the parent rather than from the report window, which can
           // still hold its initial value during the first `aboutToAppear`.
-          this.pageIsCurrent
+          this.pageIsCurrent,
+          // `abortable`: closing this document destroys the request instead of
+          // leaving it to hold the download queue for the next one.
+          true
         );
         shouldCache = buffer !== undefined;
       } else {
@@ -712,6 +715,13 @@ export struct ArchiveReaderPage {
   private readerWindowRequestId: number = 0;
 
   aboutToAppear(): void {
+    // A page request from the document opened before this one can still be in
+    // flight — the reader was closed while its page was being fetched, and a page
+    // the server cannot produce never answers at all. Such a request keeps the
+    // download queue's single slot, so every page of this document would only
+    // queue: the first page loads and the rest never start. Kill it here, before
+    // this reader asks for anything.
+    LanraragiApiClient.abortPageImageRequests();
     this.enterReaderFullscreen();
     this.loadPages();
   }
@@ -724,6 +734,11 @@ export struct ArchiveReaderPage {
     // Before anything else: work started for this reader checks this flag after
     // every await, so setting it first keeps later writes off a dead component.
     this.disposed = true;
+    // The page still being fetched is killed rather than left to finish. Left
+    // alone it would hold the connection and the download queue's only slot until
+    // the server answered, which for a page it cannot produce is never, and the
+    // next document would open with every page stuck behind it.
+    LanraragiApiClient.abortPageImageRequests();
     if (this.extractionTimer >= 0) {
       clearTimeout(this.extractionTimer);
       this.extractionTimer = -1;

@@ -27,6 +27,52 @@ const MAX_STREAMED_IMAGE_BYTES: number = 64 * 1024 * 1024;
 export type ImageProgressCallback = (receivedBytes: number, totalBytes: number) => void;
 
 /**
+ * One page-image request that can be killed when the document it belongs to goes
+ * away.
+ *
+ * A reader is closed while its page is still being fetched, and a page the server
+ * cannot produce never answers at all. The request has to be destroyed rather
+ * than left to time out: until it settles it holds the connection and the single
+ * preload slot of the queue below, so every page of the next document would wait
+ * for an answer that never comes.
+ */
+class PageImageRequest {
+  private readonly request: http.HttpRequest = http.createHttp();
+  private aborted: boolean = false;
+
+  raw(): http.HttpRequest {
+    return this.request;
+  }
+
+  isAborted(): boolean {
+    return this.aborted;
+  }
+
+  /** Destroys the request; its pending call rejects and unwinds the caller. */
+  abort(): void {
+    if (this.aborted) {
+      return;
+    }
+    this.aborted = true;
+    this.destroy();
+  }
+
+  /** Releases the request after it finished on its own. */
+  finish(): void {
+    this.destroy();
+  }
+
+  private destroy(): void {
+    try {
+      this.request.destroy();
+    } catch (error) {
+      // Already gone: destroying twice, or after the stack dropped it, is not an
+      // error worth surfacing.
+    }
+  }
+}
+
+/**
  * Serialises page-image downloads, with the page being read going first.
  *
  * Every page of a document used to start downloading at once, so the reader
@@ -42,28 +88,41 @@ export type ImageProgressCallback = (receivedBytes: number, totalBytes: number) 
 class PageImageQueue {
   private waiting: Array<number> = [];
   private sequence: number = 0;
-  private busy: boolean = false;
-  private index: number = -1;
-  private priority: number = 0;
+  /** The ticket holding the single preload slot, or 0 when the slot is free. */
+  private busyTicket: number = 0;
+  /** Tickets fetching the page on screen; a preload defers to every one. */
+  private priorityTickets: Array<number> = [];
+  /**
+   * Bumped when a new document opens. A waiter from an earlier generation gives
+   * up instead of waiting for a turn that no longer exists.
+   */
+  private generation: number = 0;
+  /** Requests a document can still have killed, by ticket. */
+  private abortable: Map<number, PageImageRequest> = new Map<number, PageImageRequest>();
 
-  /** Resolves with the ticket to hand back to `release`. */
+  /** Resolves with the ticket to hand back to `release`, or -1 when dropped. */
   async acquire(highPriority: boolean): Promise<number> {
     this.sequence += 1;
     const ticket: number = this.sequence;
+    const generation: number = this.generation;
     if (highPriority) {
-      this.priority += 1;
+      this.priorityTickets.push(ticket);
       AppLog.detail('queue',
-        `page image ${this.sequence} runs immediately (page being read, active=${this.priority})`);
+        `page image ${ticket} runs immediately (page being read, ` +
+        `active=${this.priorityTickets.length})`);
       return ticket;
     }
-    const position: number = this.waiting.length + 1;
     this.waiting.push(ticket);
-    AppLog.detail('queue', `page image ${ticket} queued at position ${position}`);
-    while (!this.mayRun(ticket)) {
+    AppLog.detail('queue', `page image ${ticket} queued at position ${this.waiting.length}`);
+    while (this.generation === generation && !this.mayRun(ticket)) {
       await this.pause();
     }
     this.waiting = this.waiting.filter((item: number) => item !== ticket);
-    this.busy = true;
+    if (this.generation !== generation) {
+      AppLog.detail('queue', `page image ${ticket} dropped with the document it belonged to`);
+      return -1;
+    }
+    this.busyTicket = ticket;
     AppLog.detail('queue', `page image ${ticket} started (${this.waiting.length} still waiting)`);
     return ticket;
   }
@@ -71,21 +130,70 @@ class PageImageQueue {
   release(ticket: number, highPriority: boolean): void {
     if (highPriority) {
       // The page on screen is done; a queued preload may take the bandwidth.
-      this.priority = Math.max(this.priority - 1, 0);
+      const slot: number = this.priorityTickets.indexOf(ticket);
+      if (slot < 0) {
+        // A reset already gave this slot back.
+        return;
+      }
+      this.priorityTickets.splice(slot, 1);
       AppLog.detail('queue', `page image ${ticket} finished (page being read)`);
       return;
     }
-    this.busy = false;
+    if (this.busyTicket !== ticket) {
+      // A reset already took the slot back, so this late release must not free
+      // the slot of the page that is running now.
+      return;
+    }
+    this.busyTicket = 0;
     AppLog.detail('queue', `page image ${ticket} finished`);
+  }
+
+  /** Registers the request a ticket is waiting on, so it can be killed. */
+  trackRequest(ticket: number, request: PageImageRequest): void {
+    this.abortable.set(ticket, request);
+  }
+
+  untrackRequest(ticket: number): void {
+    this.abortable.delete(ticket);
+  }
+
+  /**
+   * Kills what the document that just went away left behind, instead of waiting
+   * for it to answer.
+   *
+   * Opening a document and closing one both call this: a page request must not
+   * outlive the document it belongs to. Killing it is what makes the next
+   * document work at all — the request would otherwise hold the single preload
+   * slot until it settled, which for a page the server cannot produce is never,
+   * and every later page would queue behind it and never start. Tickets still
+   * waiting from the previous document are dropped at the same time, so they
+   * stop polling for a turn that no longer exists.
+   */
+  reset(): void {
+    const dropped: number = this.waiting.length;
+    const killing: Array<PageImageRequest> = [];
+    this.abortable.forEach((request: PageImageRequest) => {
+      killing.push(request);
+    });
+    this.abortable.clear();
+    this.generation += 1;
+    this.waiting = [];
+    this.busyTicket = 0;
+    this.priorityTickets = [];
+    for (const request of killing) {
+      request.abort();
+    }
+    AppLog.detail('queue',
+      `killed ${killing.length} request(s), dropped ${dropped} waiting (document changed)`);
   }
 
   /** A preloading page defers to the page on screen whenever it is fetching. */
   private isCurrentPageFetching(): boolean {
-    return this.priority > 0;
+    return this.priorityTickets.length > 0;
   }
 
   private mayRun(ticket: number): boolean {
-    if (this.isCurrentPageFetching() || this.busy) {
+    if (this.isCurrentPageFetching() || this.busyTicket !== 0) {
       return false;
     }
     return this.waiting.length > 0 && this.waiting[0] === ticket;
@@ -111,6 +219,17 @@ export class LanraragiApiClient {
    * per-instance queue would serialise nothing.
    */
   private static readonly pageQueue: PageImageQueue = new PageImageQueue();
+
+  /**
+   * Kills every page request a reader left behind, and drops the rest.
+   *
+   * Called when a document is opened and when one is closed. The queue is shared
+   * by every reader, so a request belonging to the document just left would
+   * otherwise keep its single preload slot and stall the one being opened.
+   */
+  static abortPageImageRequests(): void {
+    LanraragiApiClient.pageQueue.reset();
+  }
   private readonly baseUrl: string;
   private readonly apiKey: string;
 
@@ -332,18 +451,27 @@ export class LanraragiApiClient {
     }
   }
 
+  /**
+   * Fetches one page of an archive.
+   *
+   * `abortable` is set by the reader, which kills the request when its document
+   * is closed or replaced. Downloads leave it off: they are not tied to a
+   * document that is open, and must survive the reader being closed.
+   */
   async fetchArchivePage(
     page: ReaderPage,
     archiveId: string,
     onProgress?: ImageProgressCallback,
-    priority: boolean = false
+    priority: boolean = false,
+    abortable: boolean = false
   ): Promise<ArrayBuffer | undefined> {
     return this.fetchImage(
       this.resolveArchivePageUrl(page.path),
       archiveId,
       page.pageNumber,
       onProgress,
-      priority
+      priority,
+      abortable
     );
   }
 
@@ -419,29 +547,56 @@ export class LanraragiApiClient {
    * `priority` marks the page the user is reading: it skips the download queue
    * entirely. Everything else waits its turn, so preloading stays sequential and
    * never competes with the page on screen.
+   *
+   * `abortable` marks a request that belongs to the reader. The reader kills it
+   * when its document is closed or another one is opened, so a page the server
+   * never answers cannot hold the queue for the next document.
    */
   private async fetchImage(
     imageUrl: string,
     archiveId: string = '',
     pageNumber: number = 0,
     onProgress?: ImageProgressCallback,
-    priority: boolean = false
+    priority: boolean = false,
+    abortable: boolean = false
   ): Promise<ArrayBuffer | undefined> {
-    const ticket: number = await LanraragiApiClient.pageQueue.acquire(priority);
+    const queue: PageImageQueue = LanraragiApiClient.pageQueue;
+    const ticket: number = await queue.acquire(priority);
+    if (ticket < 0) {
+      // The document that asked for this page was left while it waited.
+      return undefined;
+    }
+    const pending: PageImageRequest = new PageImageRequest();
     try {
-      return await this.requestImage(imageUrl, archiveId, pageNumber, onProgress);
+      if (abortable) {
+        queue.trackRequest(ticket, pending);
+      }
+      return await this.requestImage(pending, imageUrl, archiveId, pageNumber, onProgress);
+    } catch (error) {
+      if (pending.isAborted()) {
+        // Killed on purpose when its document went away, which is not a failure.
+        AppLog.detail('queue', `page image ${ticket} killed with the document it belonged to`);
+        return undefined;
+      }
+      if (error instanceof Error && error.message.length > 0) {
+        throw error;
+      }
+      throw new Error(localized('图片加载失败'));
     } finally {
-      LanraragiApiClient.pageQueue.release(ticket, priority);
+      queue.untrackRequest(ticket);
+      queue.release(ticket, priority);
+      pending.finish();
     }
   }
 
   private async requestImage(
+    pending: PageImageRequest,
     imageUrl: string,
     archiveId: string,
     pageNumber: number,
     onProgress?: ImageProgressCallback
   ): Promise<ArrayBuffer | undefined> {
-    const request: http.HttpRequest = http.createHttp();
+    const request: http.HttpRequest = pending.raw();
     const headers: Record<string, string> =
       this.imageHeaders(imageUrl, archiveId, pageNumber);
     const options: http.HttpRequestOptions = {
@@ -478,6 +633,11 @@ export class LanraragiApiClient {
         `${response.result.byteLength} bytes`);
       return response.result;
     } catch (error) {
+      if (pending.isAborted()) {
+        // The request was destroyed on purpose; the caller reports it as a
+        // cancellation rather than as a failed page.
+        throw new Error(localized('页面请求已取消', 'The page request was cancelled'));
+      }
       // A message raised by this client is already user-facing; anything else —
       // a `BusinessError` from the network stack, or an SDK error — keeps its
       // code so the failure can be told apart from the others.
@@ -487,14 +647,17 @@ export class LanraragiApiClient {
       AppLog.error('http', `${imageUrl} failed: ${AppLog.describe(error)}`);
       throw new Error(this.networkErrorMessage(error, localized('图片加载失败')));
     } finally {
-      // Listeners are removed before the request is destroyed; the stream path
-      // registers them per call, and they would otherwise keep their callbacks
-      // (and the buffers they captured) alive for the lifetime of the object.
+      // Listeners are removed before the caller destroys the request; the stream
+      // path registers them per call, and they would otherwise keep their
+      // callbacks (and the buffers they captured) alive for the object's life.
       if (onProgress !== undefined) {
-        request.off('dataReceive');
-        request.off('headersReceive');
+        try {
+          request.off('dataReceive');
+          request.off('headersReceive');
+        } catch (offError) {
+          // An abort already destroyed the request.
+        }
       }
-      request.destroy();
     }
   }
 
