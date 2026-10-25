@@ -2,6 +2,7 @@ import archiveModelTest from './ArchiveModel.test';
 import archiveRowKeyTest from './ArchiveRowKey.test';
 import gridColumnsTest from './GridColumns.test';
 import pageImageQueueTest from './PageImageQueue.test';
+import privacyCoverTest from './PrivacyCover.test';
 import serverProfileEditTest from './ServerProfileEdit.test';
 
 export default function testsuite() {
@@ -9,5 +10,6 @@ export default function testsuite() {
   archiveRowKeyTest();
   gridColumnsTest();
   pageImageQueueTest();
+  privacyCoverTest();
   serverProfileEditTest();
 }

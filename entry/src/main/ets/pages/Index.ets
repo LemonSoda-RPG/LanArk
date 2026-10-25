@@ -190,6 +190,14 @@ struct Index {
   @State private isCategoryPopupVisible: boolean = false;
   @State private isSortPopupVisible: boolean = false;
   @State private visibleArchiveCount: number = 0;
+  /**
+   * Set while the app is not the foreground window.
+   *
+   * The task switcher shows a snapshot of the app, and this app's snapshots are
+   * covers and page images, so the whole page is blurred as soon as the window
+   * loses the foreground. Written by `EntryAbility`.
+   */
+  @StorageProp('lanarkPrivacyCover') private privacyCover: boolean = false;
   @State private categories: Array<CategoryItem> = [];
   @State private selectedCategoryId: string = '';
   @State private selectedCategoryName: string = '全部';
@@ -305,6 +313,10 @@ struct Index {
     .navDestination(this.pageRouter)
     .width('100%')
     .height('100%')
+    .foregroundBlurStyle(this.privacyCover ? BlurStyle.Thick : BlurStyle.NONE, {
+      colorMode: ThemeColorMode.SYSTEM,
+      adaptiveColor: AdaptiveColor.DEFAULT
+    })
     .onAreaChange((oldValue: Area, newValue: Area) => {
       if (typeof newValue.width === 'number' && newValue.width > 0 &&
         typeof newValue.height === 'number' && newValue.height > 0) {
