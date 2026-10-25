@@ -315,8 +315,10 @@ struct Index {
     .height('100%')
     // A plain blur rather than a material: the window is covered within a few
     // milliseconds of leaving the foreground, and this is the cheaper pass to
-    // get onto the screen before the task switcher takes its snapshot.
-    .blur(this.privacyCover ? 40 : 0)
+    // get onto the screen before the task switcher takes its snapshot. The radius
+    // is large enough that a cover reads as a soft patch of colour with no
+    // recognisable shapes.
+    .blur(this.privacyCover ? 80 : 0)
     .onAreaChange((oldValue: Area, newValue: Area) => {
       if (typeof newValue.width === 'number' && newValue.width > 0 &&
         typeof newValue.height === 'number' && newValue.height > 0) {
