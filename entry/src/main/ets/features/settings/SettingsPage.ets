@@ -15,6 +15,7 @@ import {
   ReaderSettingsRepository
 } from '../../data/config/ReaderSettingsRepository';
 import { ServerConfigRepository } from '../../data/config/ServerConfigRepository';
+import { isNameOnlyEdit } from '../../data/config/ServerProfileEdit';
 import { LanraragiApiClient } from '../../data/network/LanraragiApiClient';
 import {
   fetchLatestRelease,
@@ -1633,8 +1634,8 @@ export struct SettingsPage {
       return false;
     }
     const profile: ServerProfile = this.serverProfiles[this.selectedServerProfileIndex];
-    const normalized: string = LanraragiApiClient.normalizeServerUrl(this.serverUrl);
-    return normalized === profile.serverUrl && this.apiKey === profile.apiKey;
+    return isNameOnlyEdit(profile,
+      LanraragiApiClient.normalizeServerUrl(this.serverUrl), this.apiKey);
   }
 
   /**

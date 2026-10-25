@@ -28,6 +28,8 @@ import { DownloadedArchivesPage } from '../features/download/DownloadedArchivesP
 import { DownloadManagerPage } from '../features/download/DownloadManagerPage';
 import { HistoryPage } from '../features/history/HistoryPage';
 import { LibraryProgressOverlayRepository } from '../data/cache/LibraryProgressOverlayRepository';
+import { gridColumnsForWidth } from '../common/GridColumns';
+import { archiveRowKey } from '../features/library/ArchiveRowKey';
 import { ArchiveCoverView } from '../features/library/ArchiveCoverView';
 import { RandomArchivesPage } from '../features/library/RandomArchivesPage';
 import { AppLog } from '../data/log/AppLog';
@@ -697,7 +699,7 @@ struct Index {
               .onClick(() => {
                 this.openArchiveReader(archive);
               })
-            }, (archive: ArchiveItem) => `grid-${archive.id}-${archive.progress}`)
+            }, (archive: ArchiveItem) => archiveRowKey(archive, 'grid'))
           }
           .columnsTemplate(this.gridColumnsTemplate())
           .columnsGap(10)
@@ -732,7 +734,7 @@ struct Index {
               .onClick(() => {
                 this.openArchiveReader(archive);
               })
-            }, (archive: ArchiveItem) => `${archive.id}-${archive.progress}`)
+            }, (archive: ArchiveItem) => archiveRowKey(archive))
           }
           .width('100%')
           .layoutWeight(1)
@@ -1942,11 +1944,7 @@ struct Index {
     if (this.gridColumns > 0) {
       return this.gridColumns;
     }
-    const minimumCardWidth: number = 160;
-    const gap: number = 10;
-    const estimated: number = Math.floor((this.libraryContentWidth + gap) /
-      (minimumCardWidth + gap));
-    return Math.min(Math.max(estimated, 2), 6);
+    return gridColumnsForWidth(this.libraryContentWidth, 160, 10);
   }
 
   private gridColumnsTemplate(): string {

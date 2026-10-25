@@ -11,6 +11,7 @@ import {
   ServerConfig
 } from '../../domain/model/LanraragiModels';
 import { localized } from '../../common/Localization';
+import { gridColumnsForWidth } from '../../common/GridColumns';
 import { AppLog } from '../../data/log/AppLog';
 import { ArchiveGridCard } from './ArchiveGridCard';
 
@@ -209,11 +210,7 @@ export struct RandomArchivesPage {
     if (this.gridColumns > 0) {
       return this.gridColumns;
     }
-    const minimumCardWidth: number = 160;
-    const gap: number = 10;
-    const estimated: number = Math.floor((this.contentWidth + gap) /
-      (minimumCardWidth + gap));
-    return Math.min(Math.max(estimated, 2), 6);
+    return gridColumnsForWidth(this.contentWidth, 160, 10);
   }
 
   private gridTemplate(): string {
