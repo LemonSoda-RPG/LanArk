@@ -1,4 +1,10 @@
-import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
+import {
+  AbilityConstant,
+  Configuration,
+  ConfigurationConstant,
+  UIAbility,
+  Want
+} from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { AppLog } from '../data/log/AppLog';
@@ -7,6 +13,9 @@ import { PRIVACY_COVER_KEY, privacyCoverForStageEvent } from '../common/PrivacyC
 const DOMAIN: number = 0x0000;
 
 export default class EntryAbility extends UIAbility {
+  /** Kept so the bar colour can be repainted when the theme changes. */
+  private mainWindow: window.Window | undefined = undefined;
+
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     // Started here so the log covers the whole process, including window setup.
     AppLog.initialize(this.context);
@@ -41,17 +50,8 @@ export default class EntryAbility extends UIAbility {
           JSON.stringify(error)
         );
       });
-      mainWindow.setWindowSystemBarProperties({
-        statusBarColor: '#00000000',
-        navigationBarColor: '#00000000'
-      }).catch((error: Object) => {
-        hilog.error(
-          DOMAIN,
-          'LanArk',
-          'Failed to make system bars transparent. Cause: %{public}s',
-          JSON.stringify(error)
-        );
-      });
+      this.mainWindow = mainWindow;
+      this.applySystemBarColors(mainWindow);
       mainWindow.setSpecificSystemBarEnabled('status', true, false)
         .catch((error: Object) => {
           hilog.error(
@@ -143,5 +143,57 @@ export default class EntryAbility extends UIAbility {
   onForeground(): void {
     hilog.info(DOMAIN, 'LanArk', 'onForeground');
     AppStorage.setOrCreate(PRIVACY_COVER_KEY, false);
+  }
+
+  onWindowStageDestroy(): void {
+    this.mainWindow = undefined;
+  }
+
+  onConfigurationUpdate(newConfig: Configuration): void {
+    // The page background follows the light and dark palettes, so the bar that
+    // continues it has to be repainted on a theme change as well.
+    if (this.mainWindow !== undefined) {
+      this.applySystemBarColors(this.mainWindow);
+    }
+  }
+
+  /**
+   * Paints the system bars with the colour the page itself uses.
+   *
+   * The window does not extend behind the status bar, so that strip is whatever
+   * the window's bar colour is: left transparent it renders as black, which cuts
+   * a black band across the top of a page whose own background is #0F141A in the
+   * dark theme. The colour is read from the resource manager rather than written
+   * as a literal so both palettes apply, and the bar's icons are switched to stay
+   * readable on it.
+   */
+  private applySystemBarColors(windowClass: window.Window): void {
+    let background: string = '#F5F7FA';
+    try {
+      const value: number =
+        this.context.resourceManager.getColorByNameSync('page_background');
+      background = `#${(value & 0xFFFFFF).toString(16).padStart(6, '0')}`;
+    } catch (error) {
+      hilog.error(
+        DOMAIN,
+        'LanArk',
+        'Failed to read the page background colour. Cause: %{public}s',
+        JSON.stringify(error)
+      );
+    }
+    const dark: boolean = this.context.config.colorMode ===
+      ConfigurationConstant.ColorMode.COLOR_MODE_DARK;
+    windowClass.setWindowSystemBarProperties({
+      statusBarColor: background,
+      statusBarContentColor: dark ? '#FFFFFF' : '#000000',
+      navigationBarColor: background
+    }).catch((error: Object) => {
+      hilog.error(
+        DOMAIN,
+        'LanArk',
+        'Failed to colour the system bars. Cause: %{public}s',
+        JSON.stringify(error)
+      );
+    });
   }
 }
