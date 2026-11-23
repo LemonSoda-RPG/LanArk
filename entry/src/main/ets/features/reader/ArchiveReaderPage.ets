@@ -20,7 +20,8 @@ import {
   ArchivePagesResult,
   ReaderPage,
   ReaderRouteParams,
-  ServerConfig
+  ServerConfig,
+  TankChapter
 } from '../../domain/model/LanraragiModels';
 import { describeUserFacingError, localized } from '../../common/Localization';
 import { AppLog } from '../../data/log/AppLog';
@@ -688,6 +689,8 @@ export struct ArchiveReaderPage {
   @State private apiKey: string = '';
   @State private controlsVisible: boolean = false;
   @State private readerSettingsVisible: boolean = false;
+  @State private tankChapters: Array<TankChapter> = [];
+  @State private tankChaptersVisible: boolean = false;
   @State private readDirectionIndex: number = 0;
   @State private readerModeIndex: number = 0;
   @State private doublePageOffset: number = 0;
@@ -1018,6 +1021,23 @@ export struct ArchiveReaderPage {
                 })
             }
 
+            if (this.tankChapters.length > 1) {
+              Button() {
+                Image($r('app.media.icon_category'))
+                  .width(23)
+                  .height(23)
+                  .renderMode(ImageRenderMode.Template)
+                  .fillColor(Color.White)
+              }
+                .width(44)
+                .height(44)
+                .backgroundColor('#99000000')
+                .accessibilityText(localized('选择单行本内的档案'))
+                .onClick(() => {
+                  this.tankChaptersVisible = true;
+                })
+            }
+
             Button() {
               Image($r('app.media.icon_info'))
                 .width(23)
@@ -1200,6 +1220,105 @@ export struct ArchiveReaderPage {
           .position({ x: 0, y: 0 })
           .zIndex(20)
         }
+
+        if (this.tankChaptersVisible) {
+          Stack({ alignContent: Alignment.Center }) {
+            Column()
+              .width('100%')
+              .height('100%')
+              .backgroundColor('#66000000')
+              .onClick(() => {
+                this.tankChaptersVisible = false;
+              })
+
+            Column({ space: 12 }) {
+              Row() {
+                Text(localized('选择档案', 'Choose archive'))
+                  .copyOption(CopyOptions.LocalDevice)
+                  .fontSize(19)
+                  .fontWeight(FontWeight.Bold)
+                  .fontColor(Color.White)
+                  .layoutWeight(1)
+                Button(localized('关闭', 'Close'))
+                  .height(34)
+                  .fontSize(13)
+                  .fontColor(Color.White)
+                  .backgroundColor('#664A5068')
+                  .onClick(() => {
+                    this.tankChaptersVisible = false;
+                  })
+              }
+              .width('100%')
+
+              List({
+                space: 8,
+                initialIndex: this.currentTankChapterIndex()
+              }) {
+                ForEach(this.tankChapters, (chapter: TankChapter, index: number) => {
+                  ListItem() {
+                    Row({ space: 12 }) {
+                      Text(`${index + 1}`)
+                        .width(28)
+                        .height(28)
+                        .textAlign(TextAlign.Center)
+                        .fontSize(13)
+                        .fontWeight(FontWeight.Bold)
+                        .fontColor(Color.White)
+                        .backgroundColor('#664A5068')
+                        .borderRadius(14)
+                      Column({ space: 3 }) {
+                        Text(chapter.title)
+                          .copyOption(CopyOptions.LocalDevice)
+                          .fontSize(15)
+                          .fontColor(Color.White)
+                          .maxLines(2)
+                          .textOverflow({ overflow: TextOverflow.Ellipsis })
+                          .width('100%')
+                        Text(`${chapter.pageCount} ${localized('页', 'pages')} · ` +
+                          `${chapter.startPage}-${chapter.endPage}`)
+                          .copyOption(CopyOptions.LocalDevice)
+                          .fontSize(12)
+                          .fontColor('#99FFFFFF')
+                          .width('100%')
+                      }
+                      .layoutWeight(1)
+                      .alignItems(HorizontalAlign.Start)
+                      Image($r('app.media.icon_chevron_right'))
+                        .width(18)
+                        .height(18)
+                        .renderMode(ImageRenderMode.Template)
+                        .fillColor('#99FFFFFF')
+                    }
+                    .width('100%')
+                    .padding(12)
+                    .backgroundColor(this.isCurrentTankChapter(chapter) ?
+                      '#CC3F7CFF' : '#664A5068')
+                    .borderRadius(12)
+                    .accessibilityText(localized('跳到该档案', 'Jump to this archive'))
+                    .onClick(() => {
+                      this.jumpToPageNumber(chapter.startPage);
+                    })
+                  }
+                }, (chapter: TankChapter) =>
+                  `tank-chapter-${chapter.archiveId}-${chapter.startPage}`)
+              }
+              .width('100%')
+              .layoutWeight(1)
+              .scrollBar(BarState.Off)
+            }
+            .width('88%')
+            .height('70%')
+            .padding(18)
+            .backgroundColor('#E61C2434')
+            .borderRadius(24)
+            .border({ width: 1, color: '#55FFFFFF' })
+            .shadow({ radius: 24, color: '#99000000', offsetX: 0, offsetY: 8 })
+          }
+          .width('100%')
+          .height('100%')
+          .position({ x: 0, y: 0 })
+          .zIndex(21)
+        }
       }
       .width('100%')
       .height(LayoutPolicy.matchParent)
@@ -1312,21 +1431,21 @@ export struct ArchiveReaderPage {
    * but here the requests and the wait would outlive the screen that asked for
    * them — up to the retry limit, roughly two minutes.
    */
-  private async loadPagesFromServer(client: LanraragiApiClient): Promise<Array<ReaderPage>> {
+  private async loadPagesFromServer(client: LanraragiApiClient): Promise<ArchivePagesResult> {
     let attempts: number = 0;
     while (true) {
       if (this.disposed) {
-        return [];
+        return new ArchivePagesResult([]);
       }
       const result: ArchivePagesResult =
         await client.fetchArchivePagesResult(this.params.archive.id);
       // Checked again after the request: the reader may have been closed while
       // it was in flight.
       if (this.disposed) {
-        return [];
+        return new ArchivePagesResult([]);
       }
       if (result.pages.length > 0 || !result.isPreparing) {
-        return result.pages;
+        return result;
       }
       attempts += 1;
       if (attempts > READER_EXTRACT_RETRY_LIMIT) {
@@ -1401,13 +1520,16 @@ export struct ArchiveReaderPage {
       const offlineRecord: OfflineArchiveRecord | undefined =
         offlineCache.readRecord(this.params.archive.id);
       let loadedPages: Array<ReaderPage> = offlineRecord?.pages ?? [];
+      let loadedChapters: Array<TankChapter> = [];
       if (loadedPages.length === 0) {
         if (config.serverUrl.length === 0) {
           throw new Error(localized('请先在设置中配置服务器'));
         }
         const client: LanraragiApiClient =
           new LanraragiApiClient(config.serverUrl, config.apiKey);
-        loadedPages = await this.loadPagesFromServer(client);
+        const pageResult: ArchivePagesResult = await this.loadPagesFromServer(client);
+        loadedPages = pageResult.pages;
+        loadedChapters = pageResult.chapters;
       }
       if (this.disposed) {
         // The polling loop returns an empty list when the reader is gone, so
@@ -1418,6 +1540,7 @@ export struct ArchiveReaderPage {
         throw new Error(localized('服务器返回的页面列表为空'));
       }
       this.pages = loadedPages;
+      this.tankChapters = loadedChapters;
       this.pageDataSource.replace(loadedPages);
       this.rebuildSpreads();
       if (this.params.offline) {
@@ -1451,6 +1574,9 @@ export struct ArchiveReaderPage {
   }
 
   private initialPageIndex(pageCount: number): number {
+    if (this.params.startPageNumber > 0) {
+      return Math.min(Math.max(this.params.startPageNumber - 1, 0), pageCount - 1);
+    }
     if (this.params.offline) {
       if (this.params.fromStart || this.offlineProgress <= 0) {
         return 0;
@@ -1662,6 +1788,38 @@ export struct ArchiveReaderPage {
     if (localX >= centerBoundary && localX <= rightBoundary) {
       this.controlsVisible = !this.controlsVisible;
     }
+  }
+
+  /**
+   * Moves the reader to a one-based page. Used by the tankoubon chapter list,
+   * both from the in-reader sheet and from the info page.
+   */
+  private currentTankChapterIndex(): number {
+    const page: number = this.pageNumberAt(this.currentPageIndex);
+    for (let index: number = 0; index < this.tankChapters.length; index += 1) {
+      const chapter: TankChapter = this.tankChapters[index];
+      if (page >= chapter.startPage && page <= chapter.endPage) {
+        return index;
+      }
+    }
+    return 0;
+  }
+
+  private isCurrentTankChapter(chapter: TankChapter): boolean {
+    const page: number = this.pageNumberAt(this.currentPageIndex);
+    return page >= chapter.startPage && page <= chapter.endPage;
+  }
+
+  private jumpToPageNumber(oneBasedPage: number): void {
+    if (this.pages.length === 0) {
+      return;
+    }
+    const targetIndex: number =
+      Math.min(Math.max(oneBasedPage - 1, 0), this.pages.length - 1);
+    this.currentPageIndex = targetIndex;
+    this.moveReaderToIndex(targetIndex);
+    this.syncProgress(this.pages[targetIndex]);
+    this.tankChaptersVisible = false;
   }
 
   private moveReaderToIndex(targetIndex: number, animated: boolean = false): void {
@@ -1905,16 +2063,27 @@ export struct ArchiveReaderPage {
   }
 
   private openArchiveInfo(): void {
+    let currentProgress: number = this.params.archive.progress;
     if (this.pages.length > 0 && this.currentPageIndex >= 0 &&
       this.currentPageIndex < this.pages.length) {
       this.syncProgress(this.pages[this.currentPageIndex]);
+      currentProgress = this.pageNumberAt(this.currentPageIndex);
     }
     this.pathStack.pushPath({
       name: 'ArchiveInfo',
       param: new ArchiveInfoRouteParams(
-        this.params.archive,
+        this.params.archive.withProgress(currentProgress),
         this.params.offline,
-        this.params.offlineServerUrl
+        this.params.offlineServerUrl,
+        (startPage: number): void => {
+          // Pop first: the Swiper behind the info page is not laid out while
+          // another destination is on top, so changing its index there can be
+          // lost. Jumping after the pop lets the reader become active again.
+          this.pathStack.pop();
+          setTimeout(() => {
+            this.jumpToPageNumber(startPage);
+          }, 50);
+        }
       )
     });
   }

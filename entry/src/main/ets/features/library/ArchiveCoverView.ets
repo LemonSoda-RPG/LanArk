@@ -2,6 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { image } from '@kit.ImageKit';
 import { ImageDiskCache } from '../../data/cache/ImageDiskCache';
 import { LanraragiApiClient } from '../../data/network/LanraragiApiClient';
+import { archiveTypeLabel } from '../../domain/model/LanraragiModels';
 
 /**
  * Thumbnail for one archive, decoded from the disk cache or the server.
@@ -63,7 +64,7 @@ export struct ArchiveCoverView {
           .objectFit(this.cropCover && this.coverIsPortrait ?
             ImageFit.Cover : ImageFit.Contain)
       } else {
-        Text(this.fileExtension.toUpperCase())
+        Text(archiveTypeLabel(this.fileExtension))
           .copyOption(CopyOptions.LocalDevice)
           .fontSize(11)
           .fontWeight(FontWeight.Bold)
