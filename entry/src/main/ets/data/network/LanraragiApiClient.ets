@@ -4,13 +4,18 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { AppLog } from '../log/AppLog';
 import {
   ArchiveIndexPageResult,
+  ArchiveIndexPayload,
   ArchiveItem,
   ArchivePagesPayload,
   ArchivePagesResult,
   ArchiveSearchPayload,
   CategoryItem,
+  isTankoubonId,
   ReaderPage,
-  ServerInfo
+  ServerInfo,
+  TankChapter,
+  TankoubonFullPayload,
+  TankoubonPayload
 } from '../../domain/model/LanraragiModels';
 import { localized } from '../../common/Localization';
 import { AbortableRequest, PageImageQueue } from './PageImageQueue';
@@ -245,7 +250,11 @@ export class LanraragiApiClient {
   }
 
   async fetchArchiveThumbnail(archiveId: string, page: number = 0): Promise<ArrayBuffer | undefined> {
-    const path: string =
+    // A tankoubon has no archive file; its thumbnail is generated from the
+    // first page of its first archive and served by the tank endpoint. Asking
+    // `/api/archives` for one answers 400, which is why tank covers were blank.
+    const path: string = isTankoubonId(archiveId) ?
+      `/api/tankoubons/${encodeURIComponent(archiveId)}/thumbnail?no_fallback=true` :
       `/api/archives/${archiveId}/thumbnail?no_fallback=true&page=${page}`;
     return this.fetchImage(this.baseUrl + path);
   }
@@ -276,8 +285,20 @@ export class LanraragiApiClient {
    * LANraragi extracts an archive on demand: the first request for one that is
    * not ready returns an empty list plus a Minion job. Callers that want to wait
    * for it need that job id, which the plain `fetchArchivePages` drops.
+   *
+   * A tankoubon is not an archive: it has no file and `/api/archives/{id}/files`
+   * rejects its 15-character ID. Its pages are the pages of the archives it
+   * groups, concatenated in the server's order (see `fetchTankoubonPagesResult`).
    */
   async fetchArchivePagesResult(archiveId: string): Promise<ArchivePagesResult> {
+    return this.fetchArchivePagesResultAt(archiveId, 0);
+  }
+
+  private async fetchArchivePagesResultAt(archiveId: string,
+    depth: number): Promise<ArchivePagesResult> {
+    if (isTankoubonId(archiveId)) {
+      return this.fetchTankoubonPagesResult(archiveId, depth);
+    }
     AppLog.detail('http', `GET /api/archives/${archiveId}/files`);
     const request: http.HttpRequest = http.createHttp();
     try {
@@ -317,6 +338,125 @@ export class LanraragiApiClient {
   }
 
   /**
+   * Builds a tankoubon's page list from its sub-archives.
+   *
+   * `/api/tankoubons/{id}/full` returns `archives` in reading order; LANraragi's
+   * own web reader fetches `/api/archives/{sub}/files` for each of them and
+   * concatenates the results. Page numbers are rebuilt over the whole
+   * concatenation, because tank progress is a global page number and the
+   * per-archive lists all start at 1.
+   *
+   * When a sub-archive is still being extracted, the tank is reported as
+   * preparing rather than returning the pages of the archives that are ready:
+   * a truncated document would show the wrong page count and would sync a wrong
+   * global position back to the server.
+   */
+  private async fetchTankoubonPayload(tankId: string): Promise<TankoubonPayload> {
+    AppLog.detail('http', `GET /api/tankoubons/${tankId}/full`);
+    const responseText: string = await this.fetchJsonText(
+      `/api/tankoubons/${encodeURIComponent(tankId)}/full?page=-1`, localized('单行本', 'Tankoubon'));
+    const payload: TankoubonFullPayload = JSON.parse(responseText) as TankoubonFullPayload;
+    const tank: TankoubonPayload | undefined = payload.result;
+    if (tank === undefined) {
+      throw new Error(localized('单行本数据格式无法识别', 'The tankoubon data could not be parsed'));
+    }
+    return tank;
+  }
+
+  /**
+   * A tankoubon's sub-archives with their page ranges, without downloading the
+   * page lists. The info page uses this to offer a jump target per archive.
+   */
+  async fetchTankoubonChapters(tankId: string): Promise<Array<TankChapter>> {
+    const tank: TankoubonPayload = await this.fetchTankoubonPayload(tankId);
+    const archiveIds: Array<string> = tank.archives ?? [];
+    if (archiveIds.length === 0) {
+      throw new Error(localized('单行本不包含任何档案', 'The tankoubon contains no archives'));
+    }
+    const fullData: Array<ArchiveIndexPayload> = tank.full_data ?? [];
+    const chapters: Array<TankChapter> = [];
+    let startPage: number = 1;
+    for (let index: number = 0; index < archiveIds.length; index += 1) {
+      const archiveId: string = archiveIds[index];
+      const meta: ArchiveIndexPayload | undefined =
+        index < fullData.length ? fullData[index] : undefined;
+      const title: string = meta !== undefined && meta.title.length > 0 ?
+        meta.title : archiveId;
+      const pageCount: number = meta === undefined ? 0 : Math.max(meta.pagecount, 0);
+      chapters.push(new TankChapter(archiveId, title, pageCount, startPage));
+      startPage += pageCount;
+    }
+    return chapters;
+  }
+
+  private async fetchTankoubonPagesResult(tankId: string,
+    depth: number): Promise<ArchivePagesResult> {
+    if (depth >= 3) {
+      throw new Error(localized('单行本嵌套层级过深', 'Tankoubons are nested too deeply'));
+    }
+    const tank: TankoubonPayload = await this.fetchTankoubonPayload(tankId);
+    const archiveIds: Array<string> = tank.archives ?? [];
+    if (archiveIds.length === 0) {
+      throw new Error(localized('单行本不包含任何档案', 'The tankoubon contains no archives'));
+    }
+    const fullData: Array<ArchiveIndexPayload> = tank.full_data ?? [];
+    // A tank can group dozens of archives. Fetching their page lists one after
+    // another made a 10k-page tank spend ten seconds before the first page
+    // appeared; a small worker pool keeps the server load bounded while doing
+    // the round trips together.
+    const results: Array<ArchivePagesResult> =
+      new Array<ArchivePagesResult>(archiveIds.length);
+    let nextIndex: number = 0;
+    const workerCount: number = Math.min(6, archiveIds.length);
+    const workers: Array<Promise<void>> = [];
+    for (let worker: number = 0; worker < workerCount; worker += 1) {
+      workers.push((async (): Promise<void> => {
+        while (true) {
+          const index: number = nextIndex;
+          nextIndex += 1;
+          if (index >= archiveIds.length) {
+            return;
+          }
+          results[index] =
+            await this.fetchArchivePagesResultAt(archiveIds[index], depth + 1);
+        }
+      })());
+    }
+    await Promise.all(workers);
+
+    let preparingJob: number = 0;
+    for (let index: number = 0; index < results.length; index += 1) {
+      if (results[index] !== undefined && results[index].isPreparing) {
+        preparingJob = results[index].jobId;
+        break;
+      }
+    }
+    if (preparingJob > 0) {
+      return new ArchivePagesResult([], preparingJob);
+    }
+
+    const pages: Array<ReaderPage> = [];
+    const chapters: Array<TankChapter> = [];
+    for (let index: number = 0; index < archiveIds.length; index += 1) {
+      const archiveId: string = archiveIds[index];
+      const result: ArchivePagesResult = results[index];
+      const meta: ArchiveIndexPayload | undefined =
+        index < fullData.length ? fullData[index] : undefined;
+      const title: string = meta !== undefined && meta.title.length > 0 ?
+        meta.title : archiveId;
+      const startPage: number = pages.length + 1;
+      chapters.push(new TankChapter(archiveId, title, result.pages.length, startPage));
+      for (let pageIndex: number = 0; pageIndex < result.pages.length;
+        pageIndex += 1) {
+        pages.push(new ReaderPage(result.pages[pageIndex].path, pages.length + 1));
+      }
+    }
+    AppLog.detail('http',
+      `tank pages ok: ${pages.length} pages from ${archiveIds.length} archives`);
+    return new ArchivePagesResult(pages, 0, chapters);
+  }
+
+  /**
    * Fetches one page of an archive.
    *
    * `abortable` is set by the reader, which kills the request when its document
@@ -341,10 +481,13 @@ export class LanraragiApiClient {
   }
 
   async updateArchiveProgress(archiveId: string, oneBasedPageNumber: number): Promise<void> {
+    // Tanks track a global page number across their archives, which is exactly
+    // what the reader reports, but the endpoint lives under /api/tankoubons.
+    const resource: string = isTankoubonId(archiveId) ? 'tankoubons' : 'archives';
     const request: http.HttpRequest = http.createHttp();
     try {
       const response: http.HttpResponse = await request.request(
-        `${this.baseUrl}/api/archives/${archiveId}/progress/${oneBasedPageNumber}`,
+        `${this.baseUrl}/api/${resource}/${encodeURIComponent(archiveId)}/progress/${oneBasedPageNumber}`,
         {
           method: http.RequestMethod.PUT,
           header: this.requestHeaders(''),
@@ -376,11 +519,14 @@ export class LanraragiApiClient {
     // Deleting from the server cannot be undone, so the attempt, the outcome and
     // the status are all recorded: a report of "it deleted the wrong thing" or
     // "it said deleted but the archive is still there" needs them.
-    AppLog.warn('http', `DELETE /api/archives/${archiveId} (server-side delete requested)`);
+    // Deleting a tankoubon removes only the grouping; its archives stay.
+    const resource: string = isTankoubonId(archiveId) ? 'tankoubons' : 'archives';
+    AppLog.warn('http',
+      `DELETE /api/${resource}/${archiveId} (server-side delete requested)`);
     const request: http.HttpRequest = http.createHttp();
     try {
       const response: http.HttpResponse = await request.request(
-        `${this.baseUrl}/api/archives/${encodeURIComponent(archiveId)}`,
+        `${this.baseUrl}/api/${resource}/${encodeURIComponent(archiveId)}`,
         {
           method: http.RequestMethod.DELETE,
           header: this.requestHeaders('application/json'),

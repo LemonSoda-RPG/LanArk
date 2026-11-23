@@ -350,6 +350,7 @@ struct Index {
         archive: this.archiveInfoParams(param).archive,
         offline: this.archiveInfoParams(param).offline,
         offlineServerUrl: this.archiveInfoParams(param).offlineServerUrl,
+        onOpenChapter: this.archiveInfoParams(param).onOpenChapter,
         onTagSelected: (tag: string): void => {
           this.openSearchForTag(tag);
         },

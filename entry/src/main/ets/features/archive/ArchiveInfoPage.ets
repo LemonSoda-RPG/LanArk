@@ -7,7 +7,10 @@ import { OfflineProgressRepository } from '../../data/download/OfflineProgressRe
 import {
   ArchiveIndexPayload,
   ArchiveItem,
-  ServerConfig
+  isTankoubonId,
+  ReaderRouteParams,
+  ServerConfig,
+  TankChapter
 } from '../../domain/model/LanraragiModels';
 import { describeUserFacingError, isEnglishSystemLanguage, localized } from '../../common/Localization';
 import { AppLog } from '../../data/log/AppLog';
@@ -38,6 +41,14 @@ export struct ArchiveInfoPage {
   onTagSelected: (tag: string) => void = (tag: string): void => {};
   onArchiveDeleted: (archiveId: string) => void = (archiveId: string): void => {};
   onLocalDownloadDeleted: (archiveId: string) => void = (archiveId: string): void => {};
+  /**
+   * When the info page was opened from a reader, this moves that reader to the
+   * chosen tankoubon archive instead of stacking a second reader.
+   */
+  onOpenChapter?: (startPage: number) => void = undefined;
+  @State private tankChapters: Array<TankChapter> = [];
+  @State private tankChaptersLoading: boolean = false;
+  @State private tankChaptersError: string = '';
   @State private isDeleting: boolean = false;
   @State private deleteError: string = '';
   @State private downloadTask: DownloadTask | undefined = undefined;
@@ -54,6 +65,7 @@ export struct ArchiveInfoPage {
   aboutToAppear(): void {
     this.refreshDownloadState();
     DownloadManager.addChangeListener(this.downloadListener);
+    this.loadTankChapters();
   }
 
   aboutToDisappear(): void {
@@ -116,6 +128,11 @@ export struct ArchiveInfoPage {
         List({ space: 18 }) {
           ListItem() {
             this.archiveSummaryCard()
+          }
+          if (isTankoubonId(this.archive.id) && !this.offline) {
+            ListItem() {
+              this.tankChaptersSection()
+            }
           }
           ListItem() {
             this.tagSection()
@@ -242,6 +259,104 @@ export struct ArchiveInfoPage {
   }
 
   @Builder
+  private tankChaptersSection() {
+    Column({ space: 12 }) {
+      Row() {
+        Text(localized('包含档案', 'Contained archives'))
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(17)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('app.color.text_primary'))
+          .layoutWeight(1)
+        Text(this.tankChaptersLoading ? localized('加载中…', 'Loading…') :
+          `${this.tankChapters.length} ${localized('个', 'items')}`)
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(13)
+          .fontColor($r('app.color.text_tertiary'))
+      }
+      .width('100%')
+
+      Text(localized('点击任意档案可直接跳到对应页。'))
+        .copyOption(CopyOptions.LocalDevice)
+        .fontSize(13)
+        .lineHeight(19)
+        .fontColor($r('app.color.text_secondary'))
+        .width('100%')
+
+      if (this.tankChaptersError.length > 0) {
+        Text(this.tankChaptersError)
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(13)
+          .fontColor($r('app.color.error'))
+          .width('100%')
+          .padding(10)
+          .backgroundColor($r('app.color.error_soft'))
+          .borderRadius(10)
+      } else if (!this.tankChaptersLoading && this.tankChapters.length === 0) {
+        Text(localized('没有可选择的档案'))
+          .copyOption(CopyOptions.LocalDevice)
+          .fontSize(14)
+          .fontColor($r('app.color.text_tertiary'))
+          .width('100%')
+      } else {
+        Column({ space: 8 }) {
+          ForEach(this.tankChapters, (chapter: TankChapter, index: number) => {
+            Row({ space: 12 }) {
+              Text(`${index + 1}`)
+                .width(28)
+                .height(28)
+                .textAlign(TextAlign.Center)
+                .fontSize(13)
+                .fontWeight(FontWeight.Bold)
+                .fontColor($r('app.color.text_primary'))
+                .backgroundColor($r('app.color.surface_muted'))
+                .borderRadius(14)
+              Column({ space: 3 }) {
+                Text(chapter.title)
+                  .copyOption(CopyOptions.LocalDevice)
+                  .fontSize(15)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor($r('app.color.text_primary'))
+                  .maxLines(2)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .width('100%')
+                Text(`${chapter.pageCount} ${localized('页', 'pages')} · ` +
+                  `${chapter.startPage}-${chapter.endPage}`)
+                  .copyOption(CopyOptions.LocalDevice)
+                  .fontSize(12)
+                  .fontColor($r('app.color.text_tertiary'))
+                  .width('100%')
+              }
+              .layoutWeight(1)
+              .alignItems(HorizontalAlign.Start)
+              Image($r('app.media.icon_chevron_right'))
+                .width(18)
+                .height(18)
+                .renderMode(ImageRenderMode.Template)
+                .fillColor($r('app.color.text_tertiary'))
+            }
+            .width('100%')
+            .padding(12)
+            .backgroundColor($r('app.color.surface_muted'))
+            .borderRadius(12)
+            .accessibilityText(localized('跳到该档案', 'Jump to this archive'))
+            .onClick(() => {
+              this.openTankChapter(chapter);
+            })
+          }, (chapter: TankChapter) =>
+            `info-tank-chapter-${chapter.archiveId}-${chapter.startPage}`)
+        }
+        .width('100%')
+      }
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor($r('app.color.surface'))
+    .border({ width: 1, color: $r('app.color.divider') })
+    .borderRadius(16)
+  }
+
+  @Builder
   private tagSection() {
     Column({ space: 12 }) {
       Row() {
@@ -329,7 +444,9 @@ export struct ArchiveInfoPage {
       }
 
       Button(this.isDeleting ? localized('正在删除…') :
-        (this.isDownloaded || this.offline ? localized('删除本地下载') : localized('删除当前档案')))
+        (this.isDownloaded || this.offline ? localized('删除本地下载') :
+          (isTankoubonId(this.archive.id) ?
+            localized('删除当前单行本', 'Delete this tankoubon') : localized('删除当前档案'))))
         .width('100%')
         .height(48)
         .enabled(!this.isDeleting)
@@ -366,15 +483,22 @@ export struct ArchiveInfoPage {
         this.deleteError = localized('无法确认本地下载状态，请稍后重试');
         return;
       }
+      const deletingTankoubon: boolean = isTankoubonId(this.archive.id);
       const result: DeleteDialogResult = await
         (this.getUIContext().getPromptAction().showDialog({
         title: this.isDownloaded || this.offline ?
-          localized('确认删除本地下载？') : localized('确认删除当前档案？'),
+          localized('确认删除本地下载？') :
+          (deletingTankoubon ? localized('确认删除当前单行本？', 'Delete this tankoubon?') :
+            localized('确认删除当前档案？')),
         message: this.isDownloaded || this.offline ?
           localized('只会删除手机上的离线副本，不会删除服务器档案。') :
-          (isEnglishSystemLanguage() ?
-            `“${this.archive.title}” will be permanently deleted from the server. Files and metadata cannot be recovered.` :
-            `“${this.archive.title}”将从服务器永久删除，文件和元数据均无法恢复。`),
+          (deletingTankoubon ?
+            localized('只会删除这个单行本分组和单行本自己的元数据，其中的档案仍然保留在服务器上。',
+              'Only this tankoubon grouping and its own metadata will be deleted; ' +
+              'the archives it contains stay on the server.') :
+            (isEnglishSystemLanguage() ?
+              `“${this.archive.title}” will be permanently deleted from the server. Files and metadata cannot be recovered.` :
+              `“${this.archive.title}”将从服务器永久删除，文件和元数据均无法恢复。`)),
         buttons: [
           { text: localized('取消'), color: $r('app.color.text_secondary') },
           { text: localized('删除'), color: $r('app.color.error') }
@@ -444,6 +568,46 @@ export struct ArchiveInfoPage {
     } finally {
       this.isDeleting = false;
     }
+  }
+
+  private async loadTankChapters(): Promise<void> {
+    if (!isTankoubonId(this.archive.id) || this.offline) {
+      return;
+    }
+    this.tankChaptersLoading = true;
+    this.tankChaptersError = '';
+    try {
+      const config: ServerConfig = await this.repository().load();
+      if (config.serverUrl.length === 0) {
+        throw new Error(localized('请先在设置中配置服务器'));
+      }
+      const client: LanraragiApiClient =
+        new LanraragiApiClient(config.serverUrl, config.apiKey);
+      this.tankChapters = await client.fetchTankoubonChapters(this.archive.id);
+    } catch (error) {
+      this.tankChapters = [];
+      this.tankChaptersError = describeUserFacingError(
+        error, localized('加载单行本档案失败'));
+    } finally {
+      this.tankChaptersLoading = false;
+    }
+  }
+
+  private openTankChapter(chapter: TankChapter): void {
+    if (this.onOpenChapter !== undefined) {
+      this.onOpenChapter(chapter.startPage);
+      return;
+    }
+    this.pathStack.pushPath({
+      name: 'ArchiveReader',
+      param: new ReaderRouteParams(
+        this.archive,
+        true,
+        this.offline,
+        this.offlineServerUrl,
+        chapter.startPage
+      )
+    });
   }
 
   private repository(): ServerConfigRepository {

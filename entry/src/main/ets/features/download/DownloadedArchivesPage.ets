@@ -10,7 +10,7 @@ import {
 } from '../../data/config/LibrarySettingsRepository';
 import { DownloadManager } from '../../data/download/DownloadManager';
 import { OfflineProgressRepository } from '../../data/download/OfflineProgressRepository';
-import { ArchiveItem, ReaderRouteParams, ServerConfig } from '../../domain/model/LanraragiModels';
+import { ArchiveItem, archiveTypeLabel, ReaderRouteParams, ServerConfig } from '../../domain/model/LanraragiModels';
 import { localized } from '../../common/Localization';
 
 interface OfflineDeleteDialogResult {
@@ -55,7 +55,7 @@ struct DownloadedCoverView {
           .height('100%')
           .objectFit(this.cropCover ? ImageFit.Cover : ImageFit.Contain)
       } else {
-        Text(this.fileExtension.toUpperCase())
+        Text(archiveTypeLabel(this.fileExtension))
           .copyOption(CopyOptions.LocalDevice)
           .fontSize(11)
           .fontWeight(FontWeight.Bold)

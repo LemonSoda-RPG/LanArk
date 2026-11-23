@@ -330,6 +330,46 @@ export class CategoryItem {
   }
 }
 
+/**
+ * A tankoubon ID, as LANraragi reports it in search results.
+ *
+ * Tankoubons are database-only groupings of archives: they have no file of
+ * their own, and every archive endpoint rejects their ID. The ones that apply
+ * are under `/api/tankoubons`.
+ */
+export function isTankoubonId(id: string): boolean {
+  return id.startsWith('TANK_');
+}
+
+/**
+ * Short label used where a file extension is shown (cover placeholder, offline
+ * list). A tankoubon has no real file, so ".TANK" would be a lie: show the
+ * collection type instead.
+ */
+export function archiveTypeLabel(extension: string): string {
+  return extension.toLowerCase() === '.tank' ?
+    localized('单行本', 'Tankoubon') : extension.toUpperCase();
+}
+
+/** A tankoubon's own record, as returned by `/api/tankoubons/{id}/full`. */
+export interface TankoubonPayload {
+  id: string;
+  name?: string;
+  summary?: string;
+  tags?: string;
+  progress?: number;
+  /** IDs of the archives in reading order; may itself contain tankoubons. */
+  archives?: Array<string>;
+  /** Metadata for the archives, in the same order as `archives`. */
+  full_data?: Array<ArchiveIndexPayload>;
+}
+
+export interface TankoubonFullPayload {
+  result?: TankoubonPayload;
+  total?: number;
+  filtered?: number;
+}
+
 export interface ArchivePagesPayload {
   pages: Array<string>;
   /**
@@ -339,15 +379,41 @@ export interface ArchivePagesPayload {
   job?: number;
 }
 
+/**
+ * One archive inside a tankoubon, with its slice of the concatenated page list.
+ *
+ * `startPage` and `endPage` are one-based global pages, which is what the
+ * reader and the server-side tank progress use.
+ */
+export class TankChapter {
+  readonly archiveId: string;
+  readonly title: string;
+  readonly pageCount: number;
+  readonly startPage: number;
+  readonly endPage: number;
+
+  constructor(archiveId: string, title: string, pageCount: number, startPage: number) {
+    this.archiveId = archiveId;
+    this.title = title;
+    this.pageCount = pageCount;
+    this.startPage = startPage;
+    this.endPage = startPage + Math.max(pageCount, 0) - 1;
+  }
+}
+
 /** Result of asking for an archive's page list. */
 export class ArchivePagesResult {
   readonly pages: Array<ReaderPage>;
   /** Minion job extracting the archive, or 0 when there is none. */
   readonly jobId: number;
+  /** Sub-archives when the ID was a tankoubon, in reading order; empty otherwise. */
+  readonly chapters: Array<TankChapter>;
 
-  constructor(pages: Array<ReaderPage>, jobId: number = 0) {
+  constructor(pages: Array<ReaderPage>, jobId: number = 0,
+    chapters: Array<TankChapter> = []) {
     this.pages = pages;
     this.jobId = jobId;
+    this.chapters = chapters;
   }
 
   /** True when the server is still preparing this archive. */
@@ -372,17 +438,21 @@ export class ReaderRouteParams {
   readonly fromStart: boolean;
   readonly offline: boolean;
   readonly offlineServerUrl: string;
+  /** One-based page to open at; 0 keeps the saved-progress behaviour. */
+  readonly startPageNumber: number;
 
   constructor(
     archive: ArchiveItem,
     fromStart: boolean,
     offline: boolean = false,
-    offlineServerUrl: string = ''
+    offlineServerUrl: string = '',
+    startPageNumber: number = 0
   ) {
     this.archive = archive;
     this.fromStart = fromStart;
     this.offline = offline;
     this.offlineServerUrl = offlineServerUrl;
+    this.startPageNumber = startPageNumber;
   }
 }
 
@@ -391,14 +461,22 @@ export class ArchiveInfoRouteParams {
   readonly archive: ArchiveItem;
   readonly offline: boolean;
   readonly offlineServerUrl: string;
+  /**
+   * Optional jump target handler. The reader passes one so a tankoubon chapter
+   * tapped in the info page moves the reader underneath instead of stacking a
+   * second reader on top of it.
+   */
+  readonly onOpenChapter?: (startPage: number) => void;
 
   constructor(
     archive: ArchiveItem,
     offline: boolean = false,
-    offlineServerUrl: string = ''
+    offlineServerUrl: string = '',
+    onOpenChapter?: (startPage: number) => void
   ) {
     this.archive = archive;
     this.offline = offline;
     this.offlineServerUrl = offlineServerUrl;
+    this.onOpenChapter = onOpenChapter;
   }
 }

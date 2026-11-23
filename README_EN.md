@@ -9,6 +9,7 @@ LanArk is a native HarmonyOS NEXT LANraragi reader written in ArkTS and ArkUI. I
 - Local library-index and cover caching
 - List and cover-grid layouts with automatic or fixed grid columns
 - Search, category filtering, and multiple sort modes
+- Tankoubon reading: the pages of the grouped archives are concatenated in server order, and progress is tracked as one global page number
 - Reading progress synchronization with immediate local updates
 - Reading-history page ordered by most recent read time, with an in-progress-only filter
 - Single-page, two-page, and continuous reading modes
